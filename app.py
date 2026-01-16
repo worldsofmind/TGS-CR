@@ -218,7 +218,7 @@ def build_overview_page(df: pd.DataFrame):
         <style>
         .block-container { padding-top: 1.0rem; padding-bottom: 1.0rem; }
         .kpi-title { font-size: 18px; font-weight: 600; margin-bottom: 0.25rem; }
-        .kpi-value { font-size: 64px; font-weight: 800; color: #1f4e79; line-height: 1; }
+        .kpi-value { font-size: clamp(36px, 4.5vw, 56px); font-weight: 800; color: #1f4e79; line-height: 1;  }
         </style>
         """,
         unsafe_allow_html=True,
@@ -226,7 +226,7 @@ def build_overview_page(df: pd.DataFrame):
 
     st.subheader("CR Overview")
 
-    kpi1, kpi2, pie1, pie2, pie3 = st.columns([1.25, 1.25, 1.1, 1.1, 1.1])
+    kpi1, kpi2, pie1, pie2, pie3 = st.columns([1.15, 1.15, 1.35, 1.35, 1.35])
 
     with kpi1:
         st.markdown("<div class='kpi-title'>No of Change Requests<br>(CR)</div>", unsafe_allow_html=True)
