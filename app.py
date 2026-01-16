@@ -213,11 +213,20 @@ def build_overview_page(df: pd.DataFrame):
     total_effort = int(safe_sum(df_f[COL_EFFORT])) if COL_EFFORT in df_f.columns else 0
 
     # Layout
+    st.markdown(
+        """
+        <style>
+        .block-container { padding-top: 1.0rem; padding-bottom: 1.0rem; }
+        .kpi-title { font-size: 18px; font-weight: 600; margin-bottom: 0.25rem; }
+        .kpi-value { font-size: clamp(36px, 4.5vw, 56px); font-weight: 800; color: #1f4e79; line-height: 1;  }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
     st.subheader("CR Overview")
 
-    # Row 1: KPIs
-    kpi1, kpi2 = st.columns([1, 1])
+    kpi1, kpi2, pie1, pie2, pie3 = st.columns([1.15, 1.15, 1.35, 1.35, 1.35])
 
     with kpi1:
         st.markdown("<div class='kpi-title'>No of Change Requests<br>(CR)</div>", unsafe_allow_html=True)
@@ -262,32 +271,24 @@ def build_overview_page(df: pd.DataFrame):
             names=col,
             values="Count",
             title=title,
-            hole=0.0,
+            hole=0.0,  # Pie (not donut) to resemble your screenshot
             category_orders={col: list(s_cat.categories)},
         )
-        # Keep labels inside to avoid clipping at 100% zoom
         fig.update_traces(
             textinfo="percent",
-            textposition="inside",
-            insidetextorientation="auto",
+            textposition="outside",
             hovertemplate=f"{col}: %{{label}}<br>Count: %{{value}}<br>%{{percent}}<extra></extra>",
         )
-        fig.update_layout(
-            height=320,
-            margin=dict(l=10, r=10, t=40, b=10),
-            legend=dict(font=dict(size=10), itemsizing="constant"),
-            title=dict(x=0.0, xanchor="left"),
-        )
+        fig.update_layout(height=260, margin=dict(l=0, r=0, t=40, b=0), title=dict(x=0.0, xanchor="left"))
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
-    # Row 2: Pie charts
-    pie1, pie2, pie3 = st.columns([1, 1, 1])
     with pie1:
         make_pie(COL_MOSCOW, "MoSCoW", ORDER_MOSCOW)
     with pie2:
         make_pie(COL_PREP, "CR Prep Status", ORDER_PREP)
     with pie3:
         make_pie(COL_DELIVERY_STATUS, "Delivery Status", ORDER_DELIVERY)
+
     st.divider()
     b1, b2 = st.columns([1, 1])
 
@@ -323,17 +324,7 @@ def build_overview_page(df: pd.DataFrame):
 def main():
     st.set_page_config(page_title="CR Dashboard Prototype", layout="wide")
 
-    st.markdown(
-        """
-        <style>
-        /* Prevent top title clipping (esp. after reruns / on Streamlit Cloud) */
-        .block-container { padding-top: 2rem; padding-bottom: 1rem; }
-        h1, h2 { margin-top: 0.25rem; padding-top: 0.25rem; line-height: 1.15; }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-    st.markdown("## CR Dashboard Prototype (Streamlit)")
+    st.title("CR Dashboard Prototype (Streamlit)")
     st.write("Upload the Excel source file to render the prototype overview page.")
 
     uploaded = st.file_uploader(
