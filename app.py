@@ -395,27 +395,25 @@ def build_details_page(df: pd.DataFrame):
 
         prep_opts = sorted(df[COL_PREP].dropna().unique().tolist()) if COL_PREP else []
         prep_sel = st.selectbox("CR Prep Status", ["All"] + prep_opts, index=0)
-
-    # --- Main header + search box (must be right under subheader) ---
+    # --- Main header + search box (right under subheader) ---
     st.subheader("CR Details")
 
-    if "cr_search" not in st.session_state:
-        st.session_state.cr_search = ""
-
     search_col, clear_col = st.columns([5, 1])
+
     with search_col:
-        st.text_input(
+        search_text = st.text_input(
             "Search CR Number (e.g. 422)",
             key="cr_search",
             placeholder="Type part of a CR Number (matches anywhere)",
         )
+
     with clear_col:
-        st.write("\n")
+        st.write("")
         if st.button("Clear", use_container_width=True):
-            st.session_state.cr_search = ""
+            st.session_state.pop("cr_search", None)
             st.rerun()
 
-    search_text = (st.session_state.cr_search or "").strip()
+    search_text = (search_text or "").strip()
 
     # --- Apply filters (row-grain filtering) ---
     df_f = df.copy()
