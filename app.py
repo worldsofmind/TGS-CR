@@ -237,7 +237,11 @@ def build_overview_page(df: pd.DataFrame):
         df_f = df_f[df_f[COL_PO] == po_sel]
 
     # KPIs
-    total_cr = int(df_f[COL_CR_ID].nunique()) if COL_CR_ID in df_f.columns else int(len(df_f))
+    if COL_CR_ID in df_f.columns:
+        # Option A: Exclude blanks from distinct CR count (aligns with earlier 205)
+        total_cr = int(df_f.loc[df_f[COL_CR_ID] != "(Blank)", COL_CR_ID].nunique())
+    else:
+        total_cr = int(len(df_f))
     total_effort = int(safe_sum(df_f[COL_EFFORT])) if COL_EFFORT in df_f.columns else 0
 
     st.subheader("CR Overview")
