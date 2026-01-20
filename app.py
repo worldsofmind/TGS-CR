@@ -1306,14 +1306,15 @@ def build_cr_category_page(df: pd.DataFrame):
             fig_eff.update_traces(
                 textinfo="value+percent",
                 textposition="outside",
-                textfont_size=12,
+                textfont_size=11,
                 hovertemplate=f"{COL_CAT}: %{{label}}<br>Effort: %{{value}}<br>%{{percent}}<extra></extra>",
             )
             fig_eff.update_layout(
-                # Larger margins so outside labels are not clipped (esp. left/top)
-                height=520,
-                margin=dict(l=60, r=220, t=30, b=60),
-                uniformtext_minsize=10,
+                # When the Streamlit sidebar is open, the chart width is smaller and Plotly can
+                # clip outside labels (esp. left/top). Use larger margins + slightly smaller text.
+                height=560,
+                margin=dict(l=130, r=260, t=60, b=80),
+                uniformtext_minsize=9,
                 uniformtext_mode="hide",
                 legend_title_text="Broad Category",
             )
@@ -1351,14 +1352,15 @@ def build_cr_category_page(df: pd.DataFrame):
             fig_pie.update_traces(
                 textinfo="value+percent",
                 textposition="outside",
-                textfont_size=12,
+                textfont_size=11,
                 hovertemplate=f"{COL_CAT}: %{{label}}<br>Count: %{{value}}<br>%{{percent}}<extra></extra>",
             )
             fig_pie.update_layout(
-                # Larger margins so outside labels are not clipped (esp. left/top)
-                height=520,
-                margin=dict(l=60, r=220, t=30, b=60),
-                uniformtext_minsize=10,
+                # When the Streamlit sidebar is open, the chart width is smaller and Plotly can
+                # clip outside labels (esp. left/top). Use larger margins + slightly smaller text.
+                height=560,
+                margin=dict(l=130, r=260, t=60, b=80),
+                uniformtext_minsize=9,
                 uniformtext_mode="hide",
                 legend_title_text="Broad Category",
             )
