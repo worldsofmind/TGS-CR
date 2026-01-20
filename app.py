@@ -18,6 +18,7 @@ TOP_N_DEFAULT = 10  # per your requirement
 # =========================
 # Cleaning & standardisation
 # =========================
+
 def _to_blank(x) -> str:
     """Match Power BI '(Blank)' behaviour: null/empty -> '(Blank)'."""
     if pd.isna(x):
@@ -54,7 +55,7 @@ def safe_clean_text(x):
 
 def derive_cleaned_timeline(val):
     """
-    Best-effort 'Cleaned Timeline' derivation (since it may exist only in PBIX):
+    Best-effort 'Cleaned Timeline' derivation:
     - blank / TBD-like -> 'TBD'
     - parseable date -> 'MMM-YYYY'
     - otherwise keep trimmed text (e.g., '1H 2026', 'Q1 2025')
@@ -100,13 +101,56 @@ def force_category_order(series: pd.Series, preferred_order: list[str]) -> pd.Ca
     return pd.Categorical(series, categories=final, ordered=True)
 
 
+def pick_first_existing_col(df: pd.DataFrame, candidates: list[str]) -> str | None:
+    for c in candidates:
+        if c in df.columns:
+            return c
+    return None
+
+
+def apply_common_normalisation(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalise core text columns + derive timeline fields consistently."""
+    df = df.copy()
+
+    cat_cols = [
+        "Division",
+        "PO",
+        "Functional Module",
+        "CR Prep Status",
+        "MoSCoW Priorities",
+        "Agency",
+        "Delivery Status",
+        "Delivery Timeline",
+        "Cleaned Timeline",
+        "CR Number",
+        "Title",
+    ]
+    for c in cat_cols:
+        if c in df.columns:
+            df[c] = df[c].apply(safe_clean_text)
+
+    if "Cleaned Timeline" not in df.columns:
+        if "Delivery Timeline" in df.columns:
+            df["Cleaned Timeline"] = df["Delivery Timeline"].apply(derive_cleaned_timeline)
+        else:
+            df["Cleaned Timeline"] = "TBD"
+    else:
+        df["Cleaned Timeline"] = df["Cleaned Timeline"].apply(safe_clean_text)
+
+    if "Delivery Timeline (Year)" not in df.columns:
+        df["Delivery Timeline (Year)"] = df["Cleaned Timeline"].apply(year_from_cleaned)
+    else:
+        df["Delivery Timeline (Year)"] = df["Delivery Timeline (Year)"].apply(safe_clean_text)
+
+    return df
+
+
 # =========================
 # Top N + Others
 # =========================
+
 def top_n_with_others(value_counts: pd.Series, top_n: int = TOP_N_DEFAULT) -> pd.DataFrame:
-    """
-    Returns Top N categories + 'Others (n=XX)' where XX is the total count of remaining rows.
-    """
+    """Returns Top N categories + 'Others (n=XX)' where XX is total count of remaining rows."""
     vc = value_counts.copy()
     if len(vc) <= top_n:
         out = vc.reset_index()
@@ -131,66 +175,11 @@ def counts_for_chart(df: pd.DataFrame, group_col: str, show_all: bool, top_n: in
 
 
 # =========================
-# Utility helpers (schema-safe)
-# =========================
-def pick_first_existing_col(df: pd.DataFrame, candidates: list[str]) -> str | None:
-    """Return the first candidate column that exists in df, else None."""
-    for c in candidates:
-        if c in df.columns:
-            return c
-    return None
-
-
-def apply_common_normalisation(df: pd.DataFrame) -> pd.DataFrame:
-    """Normalise core text columns + derive timeline fields consistently."""
-    df = df.copy()
-
-    # Normalise likely categorical columns if present
-    cat_cols = [
-        "Division",
-        "PO",
-        "Functional Module",
-        "CR Prep Status",
-        "MoSCoW Priorities",
-        "Agency",
-        "Delivery Status",
-        "Delivery Timeline",
-        "Cleaned Timeline",
-        "CR Number",
-        "Title",
-    ]
-    for c in cat_cols:
-        if c in df.columns:
-            df[c] = df[c].apply(safe_clean_text)
-
-    # Derive timeline fields if needed (same approach as overview)
-    if "Cleaned Timeline" not in df.columns:
-        if "Delivery Timeline" in df.columns:
-            df["Cleaned Timeline"] = df["Delivery Timeline"].apply(derive_cleaned_timeline)
-        else:
-            df["Cleaned Timeline"] = "TBD"
-    else:
-        df["Cleaned Timeline"] = df["Cleaned Timeline"].apply(safe_clean_text)
-
-    if "Delivery Timeline (Year)" not in df.columns:
-        df["Delivery Timeline (Year)"] = df["Cleaned Timeline"].apply(year_from_cleaned)
-    else:
-        df["Delivery Timeline (Year)"] = df["Delivery Timeline (Year)"].apply(safe_clean_text)
-
-    return df
-
-
-# =========================
 # Data loading
 # =========================
 @st.cache_data(show_spinner=False)
 def load_excel(uploaded_file_or_path):
-    """
-    Load both sheets from Excel.
-    Accepts either:
-    - an UploadedFile (from st.file_uploader)
-    - a filesystem path (string/Path)
-    """
+    """Load both sheets from Excel."""
     df_fact = pd.read_excel(uploaded_file_or_path, sheet_name=SHEET_FACT)
     try:
         df_lookup = pd.read_excel(uploaded_file_or_path, sheet_name=SHEET_LOOKUP)
@@ -199,7 +188,13 @@ def load_excel(uploaded_file_or_path):
     return df_fact, df_lookup
 
 
+# =========================
+# Page 1: CR Overview
+# =========================
+
 def build_overview_page(df: pd.DataFrame):
+    df = apply_common_normalisation(df)
+
     # Column mapping (expected from your source)
     COL_CR_ID = "CR Number" if "CR Number" in df.columns else "#"
     COL_EFFORT = "Appx Effort (Only for pipeline estimation)"
@@ -208,23 +203,6 @@ def build_overview_page(df: pd.DataFrame):
     COL_MOSCOW = "MoSCoW Priorities"
     COL_PREP = "CR Prep Status"
     COL_DELIVERY_STATUS = "Delivery Status"
-    COL_DELIVERY_TIMELINE = "Delivery Timeline"
-
-    # Normalise key categorical columns
-    for c in [COL_DIV, COL_PO, COL_MOSCOW, COL_PREP, COL_DELIVERY_STATUS]:
-        if c in df.columns:
-            df[c] = df[c].apply(safe_clean_text)
-
-    # Derive timeline fields if needed
-    if "Cleaned Timeline" not in df.columns:
-        df["Cleaned Timeline"] = df[COL_DELIVERY_TIMELINE].apply(derive_cleaned_timeline) if COL_DELIVERY_TIMELINE in df.columns else "TBD"
-    else:
-        df["Cleaned Timeline"] = df["Cleaned Timeline"].apply(safe_clean_text)
-
-    if "Delivery Timeline (Year)" not in df.columns:
-        df["Delivery Timeline (Year)"] = df["Cleaned Timeline"].apply(year_from_cleaned)
-    else:
-        df["Delivery Timeline (Year)"] = df["Delivery Timeline (Year)"].apply(safe_clean_text)
 
     # Sidebar filters (match the Power BI overview experience)
     with st.sidebar:
@@ -262,13 +240,9 @@ def build_overview_page(df: pd.DataFrame):
     total_cr = int(df_f[COL_CR_ID].nunique()) if COL_CR_ID in df_f.columns else int(len(df_f))
     total_effort = int(safe_sum(df_f[COL_EFFORT])) if COL_EFFORT in df_f.columns else 0
 
-    # Layout
-
     st.subheader("CR Overview")
 
-    # Row 1: KPIs
     kpi1, kpi2 = st.columns([1, 1])
-
     with kpi1:
         st.markdown("<div class='kpi-title'>No of Change Requests<br>(CR)</div>", unsafe_allow_html=True)
         st.markdown(f"<div class='kpi-value'>{total_cr:,}</div>", unsafe_allow_html=True)
@@ -315,7 +289,6 @@ def build_overview_page(df: pd.DataFrame):
             hole=0.0,
             category_orders={col: list(s_cat.categories)},
         )
-        # Keep labels inside to avoid clipping at 100% zoom
         fig.update_traces(
             textinfo="percent",
             textposition="inside",
@@ -330,7 +303,6 @@ def build_overview_page(df: pd.DataFrame):
         )
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
-    # Row 2: Pie charts
     pie1, pie2, pie3 = st.columns([1, 1, 1])
     with pie1:
         make_pie(COL_MOSCOW, "MoSCoW", ORDER_MOSCOW)
@@ -338,6 +310,7 @@ def build_overview_page(df: pd.DataFrame):
         make_pie(COL_PREP, "CR Prep Status", ORDER_PREP)
     with pie3:
         make_pie(COL_DELIVERY_STATUS, "Delivery Status", ORDER_DELIVERY)
+
     st.divider()
     b1, b2 = st.columns([1, 1])
 
@@ -347,7 +320,6 @@ def build_overview_page(df: pd.DataFrame):
             return
 
         counts_df = counts_for_chart(df_f, group_col, show_all=show_all, top_n=TOP_N_DEFAULT)
-        # Sort so the largest appears at the top (Power BI-like for horizontal bars)
         counts_df = counts_df.sort_values("Count", ascending=True)
 
         fig = px.bar(
@@ -370,8 +342,11 @@ def build_overview_page(df: pd.DataFrame):
     st.caption("Prototype: Excel-driven Streamlit dashboard (internal use).")
 
 
+# =========================
+# Page 2: CR Details (row-grain)
+# =========================
+
 def build_details_page(df: pd.DataFrame):
-    """Row-grain CR details page (matches the uploaded Power BI screenshot logic)."""
     df = apply_common_normalisation(df)
 
     # Column mapping (robust to slight schema drift)
@@ -384,8 +359,7 @@ def build_details_page(df: pd.DataFrame):
     COL_MOSCOW = pick_first_existing_col(df, ["MoSCoW Priorities", "MoSCoW", "MoSCoW Priority"])
     COL_PREP = pick_first_existing_col(df, ["CR Prep Status", "Prep Status"])
 
-    # Effort column: screenshot shows "Estimated Effort". Your current overview uses
-    # "Appx Effort (Only for pipeline estimation)". Support both.
+    # Effort column: support both the pipeline column and the screenshot label
     COL_EFFORT = pick_first_existing_col(
         df,
         [
@@ -396,13 +370,7 @@ def build_details_page(df: pd.DataFrame):
         ],
     )
 
-    # Treat literal 'blank' (string) as (Blank) as well
-    if COL_CR and COL_CR in df.columns:
-        df[COL_CR] = df[COL_CR].apply(lambda x: "(Blank)" if isinstance(x, str) and x.strip().lower() == "blank" else x)
-
-    # -------------------------
-    # Sidebar filters (match the Power BI details experience)
-    # -------------------------
+    # --- Sidebar filters (CR selector must remain) ---
     with st.sidebar:
         st.header("Filters")
 
@@ -418,12 +386,9 @@ def build_details_page(df: pd.DataFrame):
         po_opts = sorted(df[COL_PO].dropna().unique().tolist()) if COL_PO else []
         po_sel = st.selectbox("PO", ["All"] + po_opts, index=0)
 
-        # IMPORTANT: keep sidebar CR selector to allow users to filter (Blank) rows explicitly.
-        cr_opts_all = []
-        if COL_CR:
-            # include (Blank) if present; apply_common_normalisation already turns NA/empty into (Blank)
-            cr_opts_all = sorted(df[COL_CR].dropna().unique().tolist())
-        cr_sel = st.selectbox("CR Number", ["All"] + cr_opts_all, index=0)
+        # Retain CR selector (not optional / not removed)
+        cr_opts = sorted(df[COL_CR].dropna().unique().tolist()) if COL_CR else []
+        cr_sel = st.selectbox("CR Number", ["All"] + cr_opts, index=0)
 
         mod_opts = sorted(df[COL_MODULE].dropna().unique().tolist()) if COL_MODULE else []
         mod_sel = st.selectbox("Functional Module", ["All"] + mod_opts, index=0)
@@ -431,33 +396,29 @@ def build_details_page(df: pd.DataFrame):
         prep_opts = sorted(df[COL_PREP].dropna().unique().tolist()) if COL_PREP else []
         prep_sel = st.selectbox("CR Prep Status", ["All"] + prep_opts, index=0)
 
-    # -------------------------
-    # Main-page quick CR search (contains match)
-    # Placed right under the page header for discoverability.
-    # -------------------------
+    # --- Main header + search box (must be right under subheader) ---
     st.subheader("CR Details")
 
-    if "cr_contains_query" not in st.session_state:
-        st.session_state["cr_contains_query"] = ""
+    if "cr_search" not in st.session_state:
+        st.session_state.cr_search = ""
 
-    c1, c2 = st.columns([4, 1])
-    with c1:
-        cr_contains = st.text_input(
-            "Search CR Number (type partial, e.g., 422)",
-            key="cr_contains_query",
-            placeholder="e.g., 422",
+    search_col, clear_col = st.columns([5, 1])
+    with search_col:
+        st.text_input(
+            "Search CR Number (e.g. 422)",
+            key="cr_search",
+            placeholder="Type part of a CR Number (matches anywhere)",
         )
-    with c2:
-        st.write(f"🔎 Showing results where CR Number contains '{search_text}' ({len(df_f)} rows)")
-        if st.button("Clear search"):
-            st.session_state["cr_contains_query"] = ""
-            cr_contains = ""
+    with clear_col:
+        st.write("\n")
+        if st.button("Clear", use_container_width=True):
+            st.session_state.cr_search = ""
+            st.rerun()
 
-    # -------------------------
-    # Apply filters (ROW GRAIN)
-    # -------------------------
+    search_text = (st.session_state.cr_search or "").strip()
+
+    # --- Apply filters (row-grain filtering) ---
     df_f = df.copy()
-
     if year_sel != "All":
         df_f = df_f[df_f["Delivery Timeline (Year)"] == year_sel]
     if cleaned_sel != "All":
@@ -466,52 +427,19 @@ def build_details_page(df: pd.DataFrame):
         df_f = df_f[df_f[COL_DIV] == div_sel]
     if po_sel != "All" and COL_PO:
         df_f = df_f[df_f[COL_PO] == po_sel]
-
-    # Main-page contains search (filters table + KPIs)
-    if cr_contains and COL_CR:
-        q = safe_clean_text(cr_contains).lower()
-        df_f = df_f[df_f[COL_CR].astype(str).str.lower().str.contains(q, na=False)]
-
-    # Sidebar CR selector (applied after search; can be used to select (Blank))
     if cr_sel != "All" and COL_CR:
         df_f = df_f[df_f[COL_CR] == cr_sel]
-
     if mod_sel != "All" and COL_MODULE:
         df_f = df_f[df_f[COL_MODULE] == mod_sel]
     if prep_sel != "All" and COL_PREP:
         df_f = df_f[df_f[COL_PREP] == prep_sel]
 
-    # -------------------------
-    # Filtered state banner (so users always know what they are seeing)
-    # -------------------------
-    active_filters = []
-    if cr_contains:
-        active_filters.append(f"CR contains '{cr_contains}'")
-    if cr_sel != "All":
-        active_filters.append(f"CR = {cr_sel}")
-    if year_sel != "All":
-        active_filters.append(f"Year = {year_sel}")
-    if cleaned_sel != "All":
-        active_filters.append(f"Timeline = {cleaned_sel}")
-    if div_sel != "All":
-        active_filters.append(f"Division = {div_sel}")
-    if po_sel != "All":
-        active_filters.append(f"PO = {po_sel}")
-    if mod_sel != "All":
-        active_filters.append(f"Module = {mod_sel}")
-    if prep_sel != "All":
-        active_filters.append(f"Prep = {prep_sel}")
+    # CR search: substring contains (case-insensitive)
+    if search_text and COL_CR:
+        mask = df_f[COL_CR].astype(str).str.contains(re.escape(search_text), case=False, na=False)
+        df_f = df_f[mask]
 
-    if active_filters:
-        st.info("Filtered by: " + " | ".join(active_filters))
-    else:
-        st.caption("Showing all rows (no filters applied).")
-
-    # -------------------------
-    # KPIs (IMPORTANT):
-    # - No. of Change Request = ROW COUNT (matches Power BI screenshot)
-    # - Total Estimated Effort = SUM over rows
-    # -------------------------
+    # --- KPIs (IMPORTANT: row count, not distinct CR) ---
     total_rows = int(len(df_f))
     total_effort = int(safe_sum(df_f[COL_EFFORT])) if COL_EFFORT else 0
 
@@ -523,10 +451,34 @@ def build_details_page(df: pd.DataFrame):
         st.markdown("<div class='kpi-title'>Total Estimated Effort</div>", unsafe_allow_html=True)
         st.markdown(f"<div class='kpi-value'>{total_effort:,}</div>", unsafe_allow_html=True)
 
+    # --- Clear filtered state indicator (KPIs + table) ---
+    active_filters = []
+    if year_sel != "All":
+        active_filters.append(f"Year={year_sel}")
+    if cleaned_sel != "All":
+        active_filters.append(f"Timeline={cleaned_sel}")
+    if div_sel != "All":
+        active_filters.append(f"Division={div_sel}")
+    if po_sel != "All":
+        active_filters.append(f"PO={po_sel}")
+    if cr_sel != "All":
+        active_filters.append(f"CR={cr_sel}")
+    if mod_sel != "All":
+        active_filters.append(f"Module={mod_sel}")
+    if prep_sel != "All":
+        active_filters.append(f"Prep={prep_sel}")
+    if search_text:
+        active_filters.append(f"CR contains '{search_text}'")
+
+    if active_filters:
+        st.info("Filtered by: " + " | ".join(active_filters))
+    else:
+        st.caption("Showing all rows (no filters applied).")
+
     st.divider()
 
-    # Display table (keep row-grain; do NOT group/deduplicate)
-    display_cols: list[str] = []
+    # --- Display table ---
+    display_cols = []
     for c in [
         COL_CR,
         COL_MODULE,
@@ -543,7 +495,7 @@ def build_details_page(df: pd.DataFrame):
         if c and c in df_f.columns and c not in display_cols:
             display_cols.append(c)
 
-    # Reasonable default sort (stable)
+    # Default sort
     sort_cols = [c for c in ["Delivery Timeline (Year)", "Cleaned Timeline", COL_CR] if c and c in df_f.columns]
     if sort_cols:
         df_f = df_f.sort_values(sort_cols, ascending=True, kind="mergesort")
@@ -558,7 +510,6 @@ def build_details_page(df: pd.DataFrame):
     st.caption("Row-grain table: duplicates and blank CR Numbers are intentionally kept to reflect workload items.")
 
 
-
 def main():
     st.set_page_config(page_title="CR Dashboard Prototype", layout="wide")
 
@@ -568,26 +519,28 @@ def main():
         /* Prevent top title clipping (esp. after reruns / on Streamlit Cloud) */
         .block-container { padding-top: 2rem; padding-bottom: 1rem; }
         h1, h2 { margin-top: 0.25rem; padding-top: 0.25rem; line-height: 1.15; }
+
+        /* Simple KPI styling */
+        .kpi-title { font-size: 0.95rem; color: #666; }
+        .kpi-value { font-size: 2.1rem; font-weight: 700; margin-top: -0.25rem; }
         </style>
         """,
         unsafe_allow_html=True,
     )
-    st.markdown("## CR Dashboard Prototype (Streamlit)")
-    st.write("Upload the Excel source file to render the prototype dashboards.")
 
-    # -------------------------
-    # Seamless dashboard navigation (sticky across reruns)
-    # Put this at the TOP of the sidebar (before any page-level filters)
-    # -------------------------
-    if "dashboard_page" not in st.session_state:
-        st.session_state["dashboard_page"] = "CR Overview"
+    st.markdown("## CR Dashboard Prototype (Streamlit)")
+    st.write("Upload the Excel source file to render the dashboards.")
+
+    # --- Seamless navigation: switcher at top of sidebar + session persistence ---
+    if "selected_dashboard" not in st.session_state:
+        st.session_state.selected_dashboard = "CR Overview"
 
     with st.sidebar:
-        st.markdown("### Dashboard")
-        page = st.radio(
+        st.header("Dashboard")
+        st.radio(
             "",
             ["CR Overview", "CR Details"],
-            key="dashboard_page",
+            key="selected_dashboard",
         )
         st.divider()
 
@@ -615,8 +568,7 @@ def main():
         st.exception(e)
         return
 
-    # Route to the selected dashboard
-    if page == "CR Overview":
+    if st.session_state.selected_dashboard == "CR Overview":
         build_overview_page(df_fact)
     else:
         build_details_page(df_fact)
