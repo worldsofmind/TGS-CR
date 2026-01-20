@@ -1306,11 +1306,15 @@ def build_cr_category_page(df: pd.DataFrame):
             fig_eff.update_traces(
                 textinfo="value+percent",
                 textposition="outside",
+                textfont_size=12,
                 hovertemplate=f"{COL_CAT}: %{{label}}<br>Effort: %{{value}}<br>%{{percent}}<extra></extra>",
             )
             fig_eff.update_layout(
-                height=420,
-                margin=dict(l=0, r=0, t=10, b=0),
+                # Larger margins so outside labels are not clipped (esp. left/top)
+                height=520,
+                margin=dict(l=60, r=220, t=30, b=60),
+                uniformtext_minsize=10,
+                uniformtext_mode="hide",
                 legend_title_text="Broad Category",
             )
             st.plotly_chart(fig_eff, use_container_width=True, config={"displayModeBar": False})
@@ -1347,11 +1351,15 @@ def build_cr_category_page(df: pd.DataFrame):
             fig_pie.update_traces(
                 textinfo="value+percent",
                 textposition="outside",
+                textfont_size=12,
                 hovertemplate=f"{COL_CAT}: %{{label}}<br>Count: %{{value}}<br>%{{percent}}<extra></extra>",
             )
             fig_pie.update_layout(
-                height=420,
-                margin=dict(l=0, r=0, t=10, b=0),
+                # Larger margins so outside labels are not clipped (esp. left/top)
+                height=520,
+                margin=dict(l=60, r=220, t=30, b=60),
+                uniformtext_minsize=10,
+                uniformtext_mode="hide",
                 legend_title_text="Broad Category",
             )
             st.plotly_chart(fig_pie, use_container_width=True, config={"displayModeBar": False})
