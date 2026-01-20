@@ -1301,22 +1301,26 @@ def build_cr_category_page(df: pd.DataFrame):
                 names=COL_CAT,
                 values="Effort",
                 title="",
+                hole=0.45,
                 category_orders={COL_CAT: list(g_eff[COL_CAT].cat.categories)},
             )
+            # Donut + legend (no outside labels) to avoid clipping when sidebar is open
             fig_eff.update_traces(
-                textinfo="value+percent",
-                textposition="outside",
-                textfont_size=11,
+                textinfo="none",
                 hovertemplate=f"{COL_CAT}: %{{label}}<br>Effort: %{{value}}<br>%{{percent}}<extra></extra>",
             )
             fig_eff.update_layout(
-                # When the Streamlit sidebar is open, the chart width is smaller and Plotly can
-                # clip outside labels (esp. left/top). Use larger margins + slightly smaller text.
-                height=560,
-                margin=dict(l=130, r=260, t=60, b=80),
-                uniformtext_minsize=9,
-                uniformtext_mode="hide",
-                legend_title_text="Broad Category",
+                height=520,
+                margin=dict(l=20, r=20, t=20, b=110),
+                legend=dict(
+                    title_text="Broad Category",
+                    orientation="h",
+                    yanchor="top",
+                    y=-0.12,
+                    xanchor="left",
+                    x=0,
+                    font=dict(size=11),
+                ),
             )
             st.plotly_chart(fig_eff, use_container_width=True, config={"displayModeBar": False})
 
@@ -1347,22 +1351,26 @@ def build_cr_category_page(df: pd.DataFrame):
                 names=COL_CAT,
                 values="Count",
                 title="",
+                hole=0.45,
                 category_orders={COL_CAT: list(g_pie[COL_CAT].cat.categories)},
             )
+            # Donut + legend (no outside labels) to avoid clipping when sidebar is open
             fig_pie.update_traces(
-                textinfo="value+percent",
-                textposition="outside",
-                textfont_size=11,
+                textinfo="none",
                 hovertemplate=f"{COL_CAT}: %{{label}}<br>Count: %{{value}}<br>%{{percent}}<extra></extra>",
             )
             fig_pie.update_layout(
-                # When the Streamlit sidebar is open, the chart width is smaller and Plotly can
-                # clip outside labels (esp. left/top). Use larger margins + slightly smaller text.
-                height=560,
-                margin=dict(l=130, r=260, t=60, b=80),
-                uniformtext_minsize=9,
-                uniformtext_mode="hide",
-                legend_title_text="Broad Category",
+                height=520,
+                margin=dict(l=20, r=20, t=20, b=110),
+                legend=dict(
+                    title_text="Broad Category",
+                    orientation="h",
+                    yanchor="top",
+                    y=-0.12,
+                    xanchor="left",
+                    x=0,
+                    font=dict(size=11),
+                ),
             )
             st.plotly_chart(fig_pie, use_container_width=True, config={"displayModeBar": False})
 
