@@ -407,14 +407,15 @@ def build_details_page(df: pd.DataFrame):
     with search_col:
         search_text = st.text_input(
             "Search CR Number (e.g. 422)",
-            key="cr_search",
+            key="cr_search_input",
             placeholder="Type part of a CR Number (matches anywhere)",
         )
 
     with clear_col:
         st.write("")
         if st.button("Clear", use_container_width=True):
-            st.session_state.pop("cr_search", None)
+            # Clear BOTH: the table filter and the visible text in the input box
+            st.session_state.pop("cr_search_input", None)
             st.rerun()
 
     search_text = (search_text or "").strip()
@@ -476,6 +477,13 @@ def build_details_page(df: pd.DataFrame):
         st.info("Filtered by: " + " | ".join(active_filters))
     else:
         st.caption("Showing all rows (no filters applied).")
+
+    # --- No results message ---
+    if df_f.empty:
+        if search_text:
+            st.warning(f"No results found for CR search: '{search_text}'.")
+        else:
+            st.warning("No results found for the selected filters.")
 
     st.divider()
 
