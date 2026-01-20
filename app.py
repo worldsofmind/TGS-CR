@@ -248,7 +248,7 @@ def build_overview_page(df: pd.DataFrame):
 
     kpi1, kpi2 = st.columns([1, 1])
     with kpi1:
-        st.markdown("<div class='kpi-title'>No of Change Requests<br>(CR)</div>", unsafe_allow_html=True)
+        st.markdown("<div class='kpi-title'>No of Unique Change Requests<br>(CR)</div>", unsafe_allow_html=True)
         st.markdown(f"<div class='kpi-value'>{total_cr:,}</div>", unsafe_allow_html=True)
 
     with kpi2:
