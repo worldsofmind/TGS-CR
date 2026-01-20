@@ -1103,6 +1103,8 @@ def build_workplan_page(df: pd.DataFrame):
             border-radius: 0 0 0 10px;
             text-align: center;
             font-weight: 700;
+            font-size: 0.9rem;
+            line-height: 1.15;
         }
         .wp-metric-right {
             background: #f7c8b5;
@@ -1110,6 +1112,10 @@ def build_workplan_page(df: pd.DataFrame):
             border-radius: 0 0 10px 0;
             text-align: center;
             font-weight: 700;
+            font-size: 0.9rem;
+            line-height: 1.15;
+            white-space: normal;
+            word-break: break-word;
         }
         .wp-period-label {
             background: #bcd7f4;
