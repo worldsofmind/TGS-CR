@@ -448,8 +448,7 @@ def build_details_page(df: pd.DataFrame):
             placeholder="e.g., 422",
         )
     with c2:
-        st.write("
-")
+        st.write(f"🔎 Showing results where CR Number contains '{search_text}' ({len(df_f)} rows)")
         if st.button("Clear search"):
             st.session_state["cr_contains_query"] = ""
             cr_contains = ""
