@@ -1070,7 +1070,7 @@ def build_workplan_page(df: pd.DataFrame):
     if period_sel != "All":
         df_f = df_f[df_f["Cleaned Timeline"] == period_sel]
 
-    st.subheader("Workplan")
+    st.subheader("CR Workplan")
 
     # Period order (include TBD if present)
     period_order = sort_delivery_periods(df_f["Cleaned Timeline"].dropna().unique().tolist())
@@ -1434,7 +1434,7 @@ def main():
         st.session_state.selected_dashboard = "CR Overview"
 
     with st.sidebar:
-        st.header("Dashboard")
+        st.header("Dashboards")
         st.radio(
             "",
             [
@@ -1444,7 +1444,7 @@ def main():
                 "CR Delivery Period",
                 "CR By Period (WOG)",
                 "CR Broad Categories",
-                "2026 Workplan",
+                "CR Workplan",
             ],
             key="selected_dashboard",
         )
@@ -1486,8 +1486,11 @@ def main():
         build_wog_period_page(df_fact)
     elif st.session_state.selected_dashboard == "CR Broad Categories":
         build_cr_category_page(df_fact)
-    else:
+    elif st.session_state.selected_dashboard == "CR Workplan":
         build_workplan_page(df_fact)
+    else:
+        # Safe fallback
+        build_overview_page(df_fact)
 
 
 if __name__ == "__main__":
