@@ -347,10 +347,22 @@ def build_overview_page(df: pd.DataFrame):
         fig.update_layout(height=360, margin=dict(l=0, r=0, t=40, b=0), title=dict(x=0.0, xanchor="left"))
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
+    # Dynamic titles to reflect whether Top-N is applied
+    div_title = (
+        'Change Requests by Divisions'
+        if show_all_div
+        else f'Change Requests by Divisions (Top {TOP_N_DEFAULT})'
+    )
+    po_title = (
+        'Change Requests by PO'
+        if show_all_po
+        else f'Change Requests by PO (Top {TOP_N_DEFAULT})'
+    )
+
     with b1:
-        make_hbar(COL_DIV, f"Change Requests by Divisions (Top {TOP_N_DEFAULT})", show_all=show_all_div)
+        make_hbar(COL_DIV, div_title, show_all=show_all_div)
     with b2:
-        make_hbar(COL_PO, f"Change Requests by PO (Top {TOP_N_DEFAULT})", show_all=show_all_po)
+        make_hbar(COL_PO, po_title, show_all=show_all_po)
 
     st.caption("Prototype: Excel-driven Streamlit dashboard (internal use).")
 
