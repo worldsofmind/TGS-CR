@@ -84,6 +84,54 @@ def year_from_cleaned(cleaned_timeline: str) -> str:
     return m.group(1) if m else "TBD"
 
 
+# =========================
+# Delivery period ordering (for timeline x-axis)
+# =========================
+
+def _delivery_period_sort_key(label: str):
+    """Sort key for Cleaned Timeline values like 'Jan-2025', 'Q1 2025', '1H 2026', 'TBD'."""
+    s = str(label).strip()
+    if s in ("", "(Blank)"):
+        s = "TBD"
+
+    if s.upper() == "TBD":
+        return (9999, 99, 9, s)
+
+    # Month-Year e.g. Jan-2025
+    try:
+        dt = pd.to_datetime(s, format="%b-%Y", errors="raise")
+        return (int(dt.year), int(dt.month), 0, s)
+    except Exception:
+        pass
+
+    # Quarter e.g. Q1 2025
+    m = re.match(r"^Q([1-4])\s*(\d{4})$", s, flags=re.I)
+    if m:
+        q = int(m.group(1))
+        y = int(m.group(2))
+        month = {1: 1, 2: 4, 3: 7, 4: 10}[q]
+        return (y, month, 1, s)
+
+    # Half-year e.g. 1H 2026 / 2H 2026
+    m = re.match(r"^([12])H\s*(\d{4})$", s, flags=re.I)
+    if m:
+        h = int(m.group(1))
+        y = int(m.group(2))
+        month = 1 if h == 1 else 7
+        return (y, month, 2, s)
+
+    # Fallback: push unknown formats to the end but keep stable order
+    y = year_from_cleaned(s)
+    try:
+        y_int = int(y)
+    except Exception:
+        y_int = 9998
+    return (y_int, 98, 8, s)
+
+
+def sort_delivery_periods(values: list[str]) -> list[str]:
+    return sorted(values, key=_delivery_period_sort_key)
+
 def safe_sum(series: pd.Series) -> float:
     s = pd.to_numeric(series, errors="coerce")
     return float(s.fillna(0).sum())
@@ -539,6 +587,220 @@ def build_details_page(df: pd.DataFrame):
     st.caption("Row-grain table: duplicates and blank CR Numbers are intentionally kept to reflect workload items.")
 
 
+
+
+# =========================
+# Page 3: CR Delivery Period (stacked bars)
+# =========================
+
+def build_delivery_period_page(df: pd.DataFrame):
+    """Replicates the PBIX-style 'by delivery period' view (see screenshot)."""
+    df = apply_common_normalisation(df)
+
+    # Columns
+    COL_PERIOD = "Cleaned Timeline"
+    COL_YEAR = "Delivery Timeline (Year)"
+    COL_CR = pick_first_existing_col(df, ["CR Number", "CR No", "CR"])
+    COL_PREP = pick_first_existing_col(df, ["CR Prep Status", "Prep Status"])
+    COL_DELIVERY_STATUS = pick_first_existing_col(df, ["Delivery Status"])
+    COL_MODULE = pick_first_existing_col(df, ["Functional Module", "Module"])
+    COL_EFFORT = pick_first_existing_col(
+        df,
+        [
+            "Appx Effort (Only for pipeline estimation)",
+            "Estimated Effort",
+            "Effort",
+            "Appx Effort",
+        ],
+    )
+
+    # Sidebar filters (match screenshot: Year multi-select; Cleaned Timeline dropdown)
+    with st.sidebar:
+        st.header("Filters")
+
+        year_opts = sort_delivery_periods(sorted(df[COL_YEAR].dropna().unique().tolist()))
+        year_sel = st.multiselect(
+            "Delivery Timeline (Year)",
+            options=year_opts,
+            default=year_opts,
+        )
+
+        period_opts = sort_delivery_periods(sorted(df[COL_PERIOD].dropna().unique().tolist()))
+        period_sel = st.selectbox("Cleaned Timeline", ["All"] + period_opts, index=0)
+
+    # Apply filters
+    df_f = df.copy()
+    if year_sel:
+        df_f = df_f[df_f[COL_YEAR].isin(year_sel)]
+    if period_sel != "All":
+        df_f = df_f[df_f[COL_PERIOD] == period_sel]
+
+    # X-axis order
+    x_order = sort_delivery_periods(sorted(df_f[COL_PERIOD].dropna().unique().tolist()))
+
+    st.subheader("CR Delivery Period")
+
+    # ---------- Chart 1: Number of CRs by Delivery Period + CR Prep Status ----------
+    st.markdown("#### Number of Change Requests By Delivery Period")
+
+    if not COL_CR or not COL_PREP:
+        st.info("Required columns not found for this chart (need CR Number and CR Prep Status).")
+    else:
+        # Count distinct, non-blank CRs per period+status (matches your CR Overview KPI definition)
+        tmp = df_f.copy()
+        tmp = tmp[tmp[COL_CR] != "(Blank)"]
+        tmp[COL_CR] = tmp[COL_CR].astype(str).str.strip()
+
+        ORDER_PREP = [
+            "(Blank)",
+            "0. CR Not Initiated",
+            "1. CR Initiated",
+            "4. CR Presented to PO/DTI",
+            "5. CR Presented to Business",
+            "6. CR Approved",
+            "7. CR Cancelled",
+        ]
+        tmp[COL_PREP] = force_category_order(tmp[COL_PREP].fillna("(Blank)"), ORDER_PREP)
+
+        g = (
+            tmp.groupby([COL_PERIOD, COL_PREP])[COL_CR]
+            .nunique()
+            .reset_index(name="CR Count")
+        )
+
+        fig1 = px.bar(
+            g,
+            x=COL_PERIOD,
+            y="CR Count",
+            color=COL_PREP,
+            category_orders={COL_PERIOD: x_order, COL_PREP: list(tmp[COL_PREP].cat.categories)},
+            barmode="stack",
+        )
+        fig1.update_layout(
+            xaxis_title="Delivery Timeline",
+            yaxis_title="Number of CRs",
+            legend_title_text="CR Prep Status",
+            height=320,
+            margin=dict(l=10, r=10, t=10, b=10),
+        )
+
+        # Segment labels (inside)
+        fig1.update_traces(texttemplate="%{y}", textposition="inside")
+
+        # Totals on top
+        totals = g.groupby(COL_PERIOD)["CR Count"].sum().reindex(x_order).fillna(0)
+        fig1.add_scatter(
+            x=list(totals.index),
+            y=list(totals.values),
+            mode="text",
+            text=[str(int(v)) if v else "" for v in totals.values],
+            textposition="top center",
+            showlegend=False,
+        )
+
+        st.plotly_chart(fig1, use_container_width=True, config={"displayModeBar": False})
+
+    # ---------- Chart 2: Delivery Status by Delivery Period (row-grain effort count = rows) ----------
+    st.markdown("#### Change Requests Delivery Status By Delivery Period")
+
+    if not COL_DELIVERY_STATUS:
+        st.info("Required column not found for this chart (need Delivery Status).")
+    else:
+        tmp2 = df_f.copy()
+
+        ORDER_DELIVERY = [
+            "(Blank)",
+            "0. Not Started",
+            "1. CR Approved",
+            "2. CR Retracted/On-hold",
+            "3. Dev in Progress",
+            "4. Dev Completed",
+            "6. UAT completed",
+            "8. Deployed",
+        ]
+
+        tmp2[COL_DELIVERY_STATUS] = force_category_order(tmp2[COL_DELIVERY_STATUS].fillna("(Blank)"), ORDER_DELIVERY)
+
+        # IMPORTANT: grain rule: effort is summed by rows
+        g2 = (
+            tmp2.groupby([COL_PERIOD, COL_DELIVERY_STATUS])
+            .size()
+            .reset_index(name="Effort")
+        )
+
+        fig2 = px.bar(
+            g2,
+            x=COL_PERIOD,
+            y="Effort",
+            color=COL_DELIVERY_STATUS,
+            category_orders={COL_PERIOD: x_order, COL_DELIVERY_STATUS: list(tmp2[COL_DELIVERY_STATUS].cat.categories)},
+            barmode="stack",
+        )
+        fig2.update_layout(
+            xaxis_title="Delivery Timeline",
+            yaxis_title="Effort",
+            legend_title_text="Delivery Status",
+            height=320,
+            margin=dict(l=10, r=10, t=10, b=10),
+        )
+        fig2.update_traces(texttemplate="%{y}", textposition="inside")
+
+        totals2 = g2.groupby(COL_PERIOD)["Effort"].sum().reindex(x_order).fillna(0)
+        fig2.add_scatter(
+            x=list(totals2.index),
+            y=list(totals2.values),
+            mode="text",
+            text=[str(int(v)) if v else "" for v in totals2.values],
+            textposition="top center",
+            showlegend=False,
+        )
+
+        st.plotly_chart(fig2, use_container_width=True, config={"displayModeBar": False})
+
+    # ---------- Chart 3: Estimated Effort across Delivery Period by Functional Module ----------
+    st.markdown("#### Estimated Effort Across Delivery Period")
+
+    if not COL_EFFORT or not COL_MODULE:
+        st.info("Required columns not found for this chart (need Functional Module and an Effort column).")
+    else:
+        tmp3 = df_f.copy()
+        tmp3[COL_MODULE] = tmp3[COL_MODULE].fillna("(Blank)")
+        tmp3[COL_EFFORT] = pd.to_numeric(tmp3[COL_EFFORT], errors="coerce").fillna(0)
+
+        g3 = (
+            tmp3.groupby([COL_PERIOD, COL_MODULE])[COL_EFFORT]
+            .sum()
+            .reset_index(name="Effort")
+        )
+
+        fig3 = px.bar(
+            g3,
+            x=COL_PERIOD,
+            y="Effort",
+            color=COL_MODULE,
+            category_orders={COL_PERIOD: x_order},
+            barmode="stack",
+        )
+        fig3.update_layout(
+            xaxis_title="Delivery Timeline",
+            yaxis_title="Effort",
+            legend_title_text="Functional Module",
+            height=340,
+            margin=dict(l=10, r=10, t=10, b=10),
+        )
+        fig3.update_traces(texttemplate="%{y:.0f}", textposition="inside")
+
+        totals3 = g3.groupby(COL_PERIOD)["Effort"].sum().reindex(x_order).fillna(0)
+        fig3.add_scatter(
+            x=list(totals3.index),
+            y=list(totals3.values),
+            mode="text",
+            text=[str(int(round(v))) if v else "" for v in totals3.values],
+            textposition="top center",
+            showlegend=False,
+        )
+
+        st.plotly_chart(fig3, use_container_width=True, config={"displayModeBar": False})
 def main():
     st.set_page_config(page_title="CR Dashboard Prototype", layout="wide")
 
@@ -568,7 +830,7 @@ def main():
         st.header("Dashboard")
         st.radio(
             "",
-            ["CR Overview", "CR Details"],
+            ["CR Overview", "CR Details", "CR Delivery Period"],
             key="selected_dashboard",
         )
         st.divider()
@@ -599,8 +861,10 @@ def main():
 
     if st.session_state.selected_dashboard == "CR Overview":
         build_overview_page(df_fact)
-    else:
+    elif st.session_state.selected_dashboard == "CR Details":
         build_details_page(df_fact)
+    else:
+        build_delivery_period_page(df_fact)
 
 
 if __name__ == "__main__":
