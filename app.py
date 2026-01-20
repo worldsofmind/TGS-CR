@@ -949,6 +949,76 @@ def build_delivery_period_page(df: pd.DataFrame):
     )
 
 
+# =========================
+# Page 5: CR By Period (WOG)
+# =========================
+
+def build_wog_period_page(df: pd.DataFrame):
+    """Whole-of-Government style view: unique CRs by delivery period, stacked by Division (per screenshot)."""
+    df = apply_common_normalisation(df)
+
+    COL_DIV = pick_first_existing_col(df, ["Division"])
+    COL_CR = pick_first_existing_col(df, ["CR Number", "CR No", "CR"])
+
+    if COL_DIV is None or COL_CR is None:
+        st.error("Missing required columns for this dashboard (need Division and CR Number).")
+        st.write("Columns found:", list(df.columns))
+        return
+
+    # ---- Sidebar filter (match screenshot: only Division) ----
+    with st.sidebar:
+        st.header("Filters")
+        div_opts = sorted(df[COL_DIV].dropna().unique().tolist())
+        div_sel = st.selectbox("Division", ["All"] + div_opts, index=0)
+
+    df_f = df.copy()
+    if div_sel != "All":
+        df_f = df_f[df_f[COL_DIV] == div_sel]
+
+    # Distinct CR counts exclude blank CR Number (align with Overview KPI definition)
+    df_nonblank_cr = df_f[df_f[COL_CR] != "(Blank)"].copy()
+
+    st.subheader("CR By Period (WOG)")
+    st.markdown("### Number of Change Requests By Period (SSG)")
+
+    period_order = sort_delivery_periods(df_f["Cleaned Timeline"].dropna().unique().tolist())
+    if not period_order:
+        period_order = sort_delivery_periods(df["Cleaned Timeline"].dropna().unique().tolist())
+
+    g = (
+        df_nonblank_cr
+        .groupby(["Cleaned Timeline", COL_DIV])[COL_CR]
+        .nunique()
+        .reset_index(name="Number of CRs")
+    )
+
+    if len(g) == 0:
+        st.info("No data available for the selected filters.")
+        return
+
+    g["Cleaned Timeline"] = pd.Categorical(g["Cleaned Timeline"], categories=period_order, ordered=True)
+    g = g.sort_values(["Cleaned Timeline", COL_DIV], kind="mergesort")
+
+    fig = px.bar(
+        g,
+        x="Cleaned Timeline",
+        y="Number of CRs",
+        color=COL_DIV,
+        barmode="stack",
+        title="",
+    )
+    fig.update_layout(
+        height=520,
+        margin=dict(l=0, r=0, t=10, b=0),
+        xaxis_title="Delivery Timeline",
+        yaxis_title="Number of CRs",
+        legend_title_text="Division",
+    )
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+    st.caption("Distinct CR counts exclude '(Blank)' CR Numbers.")
+
+
 def main():
     st.set_page_config(page_title="CR Dashboard Prototype", layout="wide")
 
@@ -978,7 +1048,13 @@ def main():
         st.header("Dashboard")
         st.radio(
             "",
-            ["CR Overview", "CR Details", "CR Division (SSG)", "CR Delivery Period"],
+            [
+                "CR Overview",
+                "CR Details",
+                "CR Division (SSG)",
+                "CR Delivery Period",
+                "CR By Period (WOG)",
+            ],
             key="selected_dashboard",
         )
         st.divider()
@@ -1013,8 +1089,10 @@ def main():
         build_details_page(df_fact)
     elif st.session_state.selected_dashboard == "CR Division (SSG)":
         build_ssg_division_page(df_fact)
-    else:
+    elif st.session_state.selected_dashboard == "CR Delivery Period":
         build_delivery_period_page(df_fact)
+    else:
+        build_wog_period_page(df_fact)
 
 
 if __name__ == "__main__":
