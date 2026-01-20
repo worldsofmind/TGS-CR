@@ -1,4 +1,5 @@
 import re
+import difflib
 from pathlib import Path
 
 import pandas as pd
@@ -412,7 +413,46 @@ def build_details_page(df: pd.DataFrame):
         po_opts = sorted(df[COL_PO].dropna().unique().tolist()) if COL_PO else []
         po_sel = st.selectbox("PO", ["All"] + po_opts, index=0)
 
-        cr_opts = sorted(df[COL_CR].dropna().unique().tolist()) if COL_CR else []
+        # --- CR Number fuzzy search ---
+        # Power BI slicers allow quick typing; emulate that with a fuzzy/contains search.
+        cr_opts_all = sorted(df[COL_CR].dropna().unique().tolist()) if COL_CR else []
+
+        cr_query = st.text_input(
+            "Search CR Number (fuzzy)",
+            value=st.session_state.get("cr_fuzzy_query", ""),
+            placeholder="e.g., TGS-CR1234-2024",
+        )
+        st.session_state["cr_fuzzy_query"] = cr_query
+
+        cr_opts = cr_opts_all
+        if cr_query and cr_opts_all:
+            q = safe_clean_text(cr_query).lower()
+
+            # 1) Fast substring matches
+            contains_matches = [c for c in cr_opts_all if safe_clean_text(c).lower().find(q) >= 0]
+
+            # 2) Fuzzy matches (case-insensitive) using difflib
+            # Map to lower for matching but keep originals for display.
+            lower_map = {safe_clean_text(c).lower(): c for c in cr_opts_all}
+            fuzzy_lowers = difflib.get_close_matches(q, list(lower_map.keys()), n=30, cutoff=0.45)
+            fuzzy_matches = [lower_map[x] for x in fuzzy_lowers]
+
+            # Combine (dedupe while preserving order) and cap length for UI usability
+            seen = set()
+            combined = []
+            for c in contains_matches + fuzzy_matches:
+                if c not in seen:
+                    combined.append(c)
+                    seen.add(c)
+                if len(combined) >= 50:
+                    break
+
+            # If we found matches, restrict selectbox options; otherwise keep full list
+            if combined:
+                cr_opts = combined
+            else:
+                st.caption("No close matches found — showing all CR Numbers.")
+
         cr_sel = st.selectbox("CR Number", ["All"] + cr_opts, index=0)
 
         mod_opts = sorted(df[COL_MODULE].dropna().unique().tolist()) if COL_MODULE else []
