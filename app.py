@@ -1022,7 +1022,7 @@ def build_wog_period_page(df: pd.DataFrame):
 
 
 # =========================
-# Page 6: CR Workplan
+# Page 6: 2026 Workplan
 # =========================
 
 def build_workplan_page(df: pd.DataFrame):
