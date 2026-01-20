@@ -1019,6 +1019,169 @@ def build_wog_period_page(df: pd.DataFrame):
     st.caption("Distinct CR counts exclude '(Blank)' CR Numbers.")
 
 
+
+
+# =========================
+# Page 6: 2026 Workplan
+# =========================
+
+def build_workplan_page(df: pd.DataFrame):
+    """Card/grid view of CRs by delivery period (workplan style, per screenshot)."""
+    df = apply_common_normalisation(df)
+
+    COL_CR = pick_first_existing_col(df, ["CR Number", "CR No", "CR"])
+    COL_TITLE = pick_first_existing_col(df, ["Title", "CR Title"])
+    COL_EFFORT = pick_first_existing_col(
+        df,
+        [
+            "Estimated Effort",
+            "Appx Effort (Only for pipeline estimation)",
+            "Effort",
+            "Appx Effort",
+        ],
+    )
+
+    if COL_CR is None or COL_TITLE is None:
+        st.error("Missing required columns for this dashboard (need CR Number and Title).")
+        st.write("Columns found:", list(df.columns))
+        return
+
+    # ---- Sidebar filters ----
+    with st.sidebar:
+        st.header("Filters")
+
+        year_opts = sorted(df["Delivery Timeline (Year)"].dropna().unique().tolist())
+        # Default to 2026 if present; else all
+        default_year = "2026" if "2026" in year_opts else (year_opts[-1] if year_opts else "All")
+        year_sel = st.selectbox("Delivery Timeline (Year)", ["All"] + year_opts, index=(1 + year_opts.index(default_year)) if default_year in year_opts else 0)
+
+        # Optional: filter to a single period (keeps layout manageable when needed)
+        period_opts_all = sort_delivery_periods(df["Cleaned Timeline"].dropna().unique().tolist())
+        period_sel = st.selectbox("Cleaned Timeline", ["All"] + period_opts_all, index=0)
+
+        # Layout option
+        cols_per_row = st.selectbox("Cards per row", [2, 3, 4], index=2)
+
+    # ---- Apply filters ----
+    df_f = df.copy()
+    if year_sel != "All":
+        df_f = df_f[df_f["Delivery Timeline (Year)"] == year_sel]
+
+    if period_sel != "All":
+        df_f = df_f[df_f["Cleaned Timeline"] == period_sel]
+
+    st.subheader("Workplan")
+
+    # Period order (include TBD if present)
+    period_order = sort_delivery_periods(df_f["Cleaned Timeline"].dropna().unique().tolist())
+    if not period_order:
+        st.info("No data available for the selected filters.")
+        return
+
+    # CSS to approximate PBIX card styling
+    st.markdown(
+        """
+        <style>
+        .wp-card-title {
+            background: #1f4e79;
+            color: white;
+            padding: 8px 10px;
+            font-weight: 700;
+            border-radius: 10px 10px 0 0;
+            font-size: 0.95rem;
+        }
+        .wp-card-body {
+            border: 1px solid #d0d0d0;
+            border-top: 0;
+            border-radius: 0 0 10px 10px;
+            padding: 8px 10px 10px 10px;
+            background: white;
+        }
+        .wp-metric-left {
+            background: #f3e6b3;
+            padding: 6px 10px;
+            border-radius: 0 0 0 10px;
+            text-align: center;
+            font-weight: 700;
+        }
+        .wp-metric-right {
+            background: #f7c8b5;
+            padding: 6px 10px;
+            border-radius: 0 0 10px 0;
+            text-align: center;
+            font-weight: 700;
+        }
+        .wp-period-label {
+            background: #bcd7f4;
+            color: #0b2d4d;
+            padding: 6px 10px;
+            border-radius: 8px;
+            text-align: center;
+            font-weight: 700;
+            margin-top: 6px;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # Build cards
+    n_cols = int(cols_per_row)
+    rows = [period_order[i:i+n_cols] for i in range(0, len(period_order), n_cols)]
+
+    for row_periods in rows:
+        cols = st.columns(n_cols)
+        for i in range(n_cols):
+            if i >= len(row_periods):
+                cols[i].empty()
+                continue
+            period = row_periods[i]
+            with cols[i]:
+                # Filter per card period
+                df_p = df_f[df_f["Cleaned Timeline"] == period].copy()
+
+                # Table (CR Number + Title), keep duplicates/blanks as-is (row grain)
+                table_df = df_p[[COL_CR, COL_TITLE]].copy()
+                # Sort stable for readability
+                table_df = table_df.sort_values([COL_CR, COL_TITLE], kind="mergesort")
+
+                # Metrics
+                # Unique CRs: distinct non-blank CR Number (align with your KPI definition)
+                uniq_cr = int(table_df.loc[table_df[COL_CR] != "(Blank)", COL_CR].nunique())
+
+                # Effort: sum of effort column if present; show '(Blank)' when all blank
+                effort_display = "(Blank)"
+                if COL_EFFORT is not None and COL_EFFORT in df_p.columns:
+                    eff_num = pd.to_numeric(df_p[COL_EFFORT], errors="coerce")
+                    if eff_num.notna().any():
+                        effort_display = f"{int(eff_num.fillna(0).sum()):,}"
+
+                # Render header
+                st.markdown('<div class="wp-card-title">CR Number&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Title</div>', unsafe_allow_html=True)
+
+                with st.container(border=True):
+                    st.dataframe(
+                        table_df,
+                        use_container_width=True,
+                        hide_index=True,
+                        height=200,
+                    )
+
+                    # Bottom metrics band (2 cells)
+                    m1, m2 = st.columns(2)
+                    with m1:
+                        st.markdown(f'<div class="wp-metric-left">{uniq_cr}</div>', unsafe_allow_html=True)
+                    with m2:
+                        st.markdown(f'<div class="wp-metric-right">{effort_display}</div>', unsafe_allow_html=True)
+
+                st.markdown(f'<div class="wp-period-label">{period}</div>', unsafe_allow_html=True)
+
+    st.caption(
+        "Card view: table preserves row-grain records (duplicates + '(Blank)' CR Numbers). "
+        "The left metric is distinct non-blank CR count; the right metric is summed estimated effort (if available)."
+    )
+
+
 def main():
     st.set_page_config(page_title="CR Dashboard Prototype", layout="wide")
 
@@ -1054,6 +1217,7 @@ def main():
                 "CR Division (SSG)",
                 "CR Delivery Period",
                 "CR By Period (WOG)",
+                "2026 Workplan",
             ],
             key="selected_dashboard",
         )
@@ -1091,8 +1255,10 @@ def main():
         build_ssg_division_page(df_fact)
     elif st.session_state.selected_dashboard == "CR Delivery Period":
         build_delivery_period_page(df_fact)
-    else:
+    elif st.session_state.selected_dashboard == "CR By Period (WOG)":
         build_wog_period_page(df_fact)
+    else:
+        build_workplan_page(df_fact)
 
 
 if __name__ == "__main__":
