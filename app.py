@@ -417,41 +417,40 @@ def build_details_page(df: pd.DataFrame):
         # Power BI slicers allow quick typing; emulate that with a fuzzy/contains search.
         cr_opts_all = sorted(df[COL_CR].dropna().unique().tolist()) if COL_CR else []
 
+        # You can type partials like "422" and we will match any CR Number containing it.
         cr_query = st.text_input(
-            "Search CR Number (fuzzy)",
-            value=st.session_state.get("cr_fuzzy_query", ""),
-            placeholder="e.g., TGS-CR1234-2024",
+            "Search CR Number",
+            value=st.session_state.get("cr_contains_query", ""),
+            placeholder="e.g., 422",
         )
-        st.session_state["cr_fuzzy_query"] = cr_query
+        st.session_state["cr_contains_query"] = cr_query
 
         cr_opts = cr_opts_all
-        if cr_query and cr_opts_all:
-            q = safe_clean_text(cr_query).lower()
+        q_norm = str(cr_query).strip().lower()
+        if q_norm and cr_opts_all:
+            # 1) Substring (contains) matches — the primary behaviour (e.g., "422")
+            contains_matches = [c for c in cr_opts_all if q_norm in str(c).strip().lower()]
 
-            # 1) Fast substring matches
-            contains_matches = [c for c in cr_opts_all if safe_clean_text(c).lower().find(q) >= 0]
-
-            # 2) Fuzzy matches (case-insensitive) using difflib
-            # Map to lower for matching but keep originals for display.
-            lower_map = {safe_clean_text(c).lower(): c for c in cr_opts_all}
-            fuzzy_lowers = difflib.get_close_matches(q, list(lower_map.keys()), n=30, cutoff=0.45)
+            # 2) Optional fuzzy matches (helps with typos), appended after contains matches
+            lower_map = {str(c).strip().lower(): c for c in cr_opts_all}
+            fuzzy_lowers = difflib.get_close_matches(q_norm, list(lower_map.keys()), n=30, cutoff=0.60)
             fuzzy_matches = [lower_map[x] for x in fuzzy_lowers]
 
             # Combine (dedupe while preserving order) and cap length for UI usability
             seen = set()
-            combined = []
+            combined: list[str] = []
             for c in contains_matches + fuzzy_matches:
                 if c not in seen:
                     combined.append(c)
                     seen.add(c)
-                if len(combined) >= 50:
+                if len(combined) >= 80:
                     break
 
-            # If we found matches, restrict selectbox options; otherwise keep full list
             if combined:
                 cr_opts = combined
+                st.caption(f"CR Number search: '{cr_query}' → {len(combined)} matching CR Numbers")
             else:
-                st.caption("No close matches found — showing all CR Numbers.")
+                st.caption(f"CR Number search: '{cr_query}' → 0 matches (showing all CR Numbers)")
 
         cr_sel = st.selectbox("CR Number", ["All"] + cr_opts, index=0)
 
@@ -471,6 +470,13 @@ def build_details_page(df: pd.DataFrame):
         df_f = df_f[df_f[COL_DIV] == div_sel]
     if po_sel != "All" and COL_PO:
         df_f = df_f[df_f[COL_PO] == po_sel]
+    # CR search (contains): filters the MAIN TABLE and KPIs even if you don't pick from the dropdown.
+    # Example: typing "422" matches "TGS-CR422-2023".
+    q_norm = str(st.session_state.get("cr_contains_query", "")).strip().lower()
+    if q_norm and COL_CR:
+        df_f = df_f[df_f[COL_CR].astype(str).str.strip().str.lower().str.contains(q_norm, na=False)]
+
+    # Exact CR selection (intersects with the above, if used)
     if cr_sel != "All" and COL_CR:
         df_f = df_f[df_f[COL_CR] == cr_sel]
     if mod_sel != "All" and COL_MODULE:
@@ -493,6 +499,10 @@ def build_details_page(df: pd.DataFrame):
     with k2:
         st.markdown("<div class='kpi-title'>Total Estimated Effort</div>", unsafe_allow_html=True)
         st.markdown(f"<div class='kpi-value'>{total_effort:,}</div>", unsafe_allow_html=True)
+
+    # Make the search effect obvious on the main page (not just in the sidebar)
+    if q_norm:
+        st.caption(f"Filtered by CR Number containing: '{q_norm}'")
 
     st.divider()
 
