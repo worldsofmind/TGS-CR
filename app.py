@@ -1182,6 +1182,230 @@ def build_workplan_page(df: pd.DataFrame):
     )
 
 
+# =========================
+# Page 7: CR Category Dashboard (Pie + Division stacked bar)
+# =========================
+
+def build_cr_category_page(df: pd.DataFrame):
+    """Combined Broad Category dashboard (per your screenshots).
+
+    One page with shared filters + three visuals:
+      1) Pie: Efforts Across Broad Categories (effort = sum of effort values by rows)
+      2) Pie: Change Requests by Broad Categories (distinct, non-blank CR count)
+         + KPI card: total distinct, non-blank CRs
+      3) Stacked bar: CR Category by Divisions (distinct, non-blank CR count)
+
+    Grain rules preserved:
+      - Row = workload / effort grain (no dedup for effort)
+      - Multi-row CRs and blank CR Numbers remain legitimate
+      - Distinct CR counts exclude '(Blank)' CR Numbers (align with Overview KPI)
+    """
+
+    df = apply_common_normalisation(df)
+
+    COL_CR = pick_first_existing_col(df, ["CR Number", "CR No", "CR"])
+    COL_DIV = pick_first_existing_col(df, ["Division"])
+    COL_PREP = pick_first_existing_col(df, ["CR Prep Status", "Prep Status"])
+    COL_CAT = pick_first_existing_col(df, ["Broad Category", "Category", "CR Category"])
+    COL_EFFORT = pick_first_existing_col(
+        df,
+        [
+            "Estimated Effort",
+            "Appx Effort (Only for pipeline estimation)",
+            "Effort",
+            "Appx Effort",
+        ],
+    )
+
+    if any(c is None for c in [COL_CR, COL_DIV, COL_PREP, COL_CAT]):
+        st.error(
+            "Missing required columns for this dashboard. Need CR Number, Division, CR Prep Status, and Broad Category."
+        )
+        st.write("Columns found:", list(df.columns))
+        return
+
+    # ---- Sidebar filters (shared; match screenshots) ----
+    with st.sidebar:
+        st.header("Filters")
+
+        year_opts = sorted(df["Delivery Timeline (Year)"].dropna().unique().tolist())
+        year_sel = st.selectbox("Delivery Timeline (Year)", ["All"] + year_opts, index=0)
+
+        cleaned_opts = sort_delivery_periods(df["Cleaned Timeline"].dropna().unique().tolist())
+        cleaned_sel = st.selectbox("Cleaned Timeline", ["All"] + cleaned_opts, index=0)
+
+        prep_opts = sorted(df[COL_PREP].dropna().unique().tolist())
+        prep_sel = st.multiselect("CR Prep Status", prep_opts, default=prep_opts)
+
+        div_opts = sorted(df[COL_DIV].dropna().unique().tolist())
+        div_sel = st.multiselect("Division", div_opts, default=div_opts)
+
+    # ---- Apply filters ----
+    df_f = df.copy()
+    if year_sel != "All":
+        df_f = df_f[df_f["Delivery Timeline (Year)"] == year_sel]
+    if cleaned_sel != "All":
+        df_f = df_f[df_f["Cleaned Timeline"] == cleaned_sel]
+    if prep_sel:
+        df_f = df_f[df_f[COL_PREP].isin(prep_sel)]
+    if div_sel:
+        df_f = df_f[df_f[COL_DIV].isin(div_sel)]
+
+    # Distinct CR counts exclude blank CR Number (align with Overview KPI definition)
+    df_nonblank_cr = df_f[df_f[COL_CR] != "(Blank)"].copy()
+    total_unique_cr = int(df_nonblank_cr[COL_CR].nunique())
+
+    st.subheader("CR Broad Categories")
+
+    # Preferred legend order (match screenshot)
+    ORDER_CAT = [
+        "Operations",
+        "(Blank)",
+        "Policy",
+        "Improve Stakeholder Experience",
+        "IM8 / Governance",
+        "Increase Productivity",
+        "New Feature(s)",
+        "Technical",
+    ]
+
+    # =========================
+    # Visual 1: Efforts Across Broad Categories (pie)
+    # =========================
+    st.markdown("### Efforts Across Broad Categories")
+    if COL_EFFORT is None:
+        st.info("Effort column not found (expected something like 'Appx Effort (Only for pipeline estimation)').")
+    else:
+        g_eff = (
+            df_f
+            .groupby(COL_CAT)[COL_EFFORT]
+            .apply(safe_sum)
+            .reset_index(name="Effort")
+        )
+        if len(g_eff) == 0 or g_eff["Effort"].sum() == 0:
+            st.info("No effort data available for the selected filters.")
+        else:
+            g_eff[COL_CAT] = force_category_order(g_eff[COL_CAT], ORDER_CAT)
+            g_eff = g_eff.sort_values(COL_CAT, kind="mergesort")
+
+            fig_eff = px.pie(
+                g_eff,
+                names=COL_CAT,
+                values="Effort",
+                title="",
+                category_orders={COL_CAT: list(g_eff[COL_CAT].cat.categories)},
+            )
+            fig_eff.update_traces(
+                textinfo="value+percent",
+                textposition="outside",
+                hovertemplate=f"{COL_CAT}: %{{label}}<br>Effort: %{{value}}<br>%{{percent}}<extra></extra>",
+            )
+            fig_eff.update_layout(
+                height=420,
+                margin=dict(l=0, r=0, t=10, b=0),
+                legend_title_text="Broad Category",
+            )
+            st.plotly_chart(fig_eff, use_container_width=True, config={"displayModeBar": False})
+
+    st.divider()
+
+    # =========================
+    # Visual 2: Change Requests by Broad Categories (pie) + KPI
+    # =========================
+    st.markdown("### Change Requests by Broad Categories")
+    top_left, top_right = st.columns([4, 1])
+
+    with top_left:
+        g_pie = (
+            df_nonblank_cr
+            .groupby(COL_CAT)[COL_CR]
+            .nunique()
+            .reset_index(name="Count")
+        )
+
+        if len(g_pie) == 0:
+            st.info("No data available for the selected filters.")
+        else:
+            g_pie[COL_CAT] = force_category_order(g_pie[COL_CAT], ORDER_CAT)
+            g_pie = g_pie.sort_values(COL_CAT, kind="mergesort")
+
+            fig_pie = px.pie(
+                g_pie,
+                names=COL_CAT,
+                values="Count",
+                title="",
+                category_orders={COL_CAT: list(g_pie[COL_CAT].cat.categories)},
+            )
+            fig_pie.update_traces(
+                textinfo="value+percent",
+                textposition="outside",
+                hovertemplate=f"{COL_CAT}: %{{label}}<br>Count: %{{value}}<br>%{{percent}}<extra></extra>",
+            )
+            fig_pie.update_layout(
+                height=420,
+                margin=dict(l=0, r=0, t=10, b=0),
+                legend_title_text="Broad Category",
+            )
+            st.plotly_chart(fig_pie, use_container_width=True, config={"displayModeBar": False})
+
+    with top_right:
+        st.markdown(
+            """
+            <div style="text-align:right; padding-top: 40px;">
+              <div style="font-size: 18px; color: #333;">No of Change Requests<br>(CR)</div>
+              <div style="font-size: 64px; font-weight: 800; color: #1f4e79; line-height: 1;">{}</div>
+            </div>
+            """.format(total_unique_cr),
+            unsafe_allow_html=True,
+        )
+
+    st.divider()
+
+    # =========================
+    # Visual 3: CR Category by Divisions (stacked)
+    # =========================
+    st.markdown("### CR Category by Divisions")
+
+    g_bar = (
+        df_nonblank_cr
+        .groupby([COL_DIV, COL_CAT])[COL_CR]
+        .nunique()
+        .reset_index(name="Count")
+    )
+
+    if len(g_bar) == 0:
+        st.info("No data available for the selected filters.")
+        return
+
+    div_order = sorted(df_nonblank_cr[COL_DIV].dropna().unique().tolist())
+    g_bar[COL_DIV] = pd.Categorical(g_bar[COL_DIV], categories=div_order, ordered=True)
+    g_bar[COL_CAT] = force_category_order(g_bar[COL_CAT], ORDER_CAT)
+    g_bar = g_bar.sort_values([COL_DIV, COL_CAT], kind="mergesort")
+
+    fig_bar = px.bar(
+        g_bar,
+        x=COL_DIV,
+        y="Count",
+        color=COL_CAT,
+        barmode="stack",
+        title="",
+        category_orders={COL_DIV: div_order, COL_CAT: list(g_bar[COL_CAT].cat.categories)},
+    )
+    fig_bar.update_layout(
+        height=430,
+        margin=dict(l=0, r=0, t=10, b=0),
+        xaxis_title="Division",
+        yaxis_title="Count of #",
+        legend_title_text="Broad Category",
+    )
+    st.plotly_chart(fig_bar, use_container_width=True, config={"displayModeBar": False})
+
+    st.caption(
+        "Counts are distinct non-blank CR Numbers (same definition as the Overview 'No of Unique CR'). "
+        "Effort is summed by rows (no CR deduplication)."
+    )
+
+
 def main():
     st.set_page_config(page_title="CR Dashboard Prototype", layout="wide")
 
@@ -1217,6 +1441,7 @@ def main():
                 "CR Division (SSG)",
                 "CR Delivery Period",
                 "CR By Period (WOG)",
+                "CR Broad Categories",
                 "2026 Workplan",
             ],
             key="selected_dashboard",
@@ -1257,6 +1482,8 @@ def main():
         build_delivery_period_page(df_fact)
     elif st.session_state.selected_dashboard == "CR By Period (WOG)":
         build_wog_period_page(df_fact)
+    elif st.session_state.selected_dashboard == "CR Broad Categories":
+        build_cr_category_page(df_fact)
     else:
         build_workplan_page(df_fact)
 
