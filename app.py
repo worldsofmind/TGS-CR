@@ -1,5 +1,4 @@
 import re
-import difflib
 from pathlib import Path
 
 import pandas as pd
@@ -397,7 +396,13 @@ def build_details_page(df: pd.DataFrame):
         ],
     )
 
+    # Treat literal 'blank' (string) as (Blank) as well
+    if COL_CR and COL_CR in df.columns:
+        df[COL_CR] = df[COL_CR].apply(lambda x: "(Blank)" if isinstance(x, str) and x.strip().lower() == "blank" else x)
+
+    # -------------------------
     # Sidebar filters (match the Power BI details experience)
+    # -------------------------
     with st.sidebar:
         st.header("Filters")
 
@@ -413,46 +418,12 @@ def build_details_page(df: pd.DataFrame):
         po_opts = sorted(df[COL_PO].dropna().unique().tolist()) if COL_PO else []
         po_sel = st.selectbox("PO", ["All"] + po_opts, index=0)
 
-        # --- CR Number fuzzy search ---
-        # Power BI slicers allow quick typing; emulate that with a fuzzy/contains search.
-        cr_opts_all = sorted(df[COL_CR].dropna().unique().tolist()) if COL_CR else []
-
-        # You can type partials like "422" and we will match any CR Number containing it.
-        cr_query = st.text_input(
-            "Search CR Number",
-            value=st.session_state.get("cr_contains_query", ""),
-            placeholder="e.g., 422",
-        )
-        st.session_state["cr_contains_query"] = cr_query
-
-        cr_opts = cr_opts_all
-        q_norm = str(cr_query).strip().lower()
-        if q_norm and cr_opts_all:
-            # 1) Substring (contains) matches — the primary behaviour (e.g., "422")
-            contains_matches = [c for c in cr_opts_all if q_norm in str(c).strip().lower()]
-
-            # 2) Optional fuzzy matches (helps with typos), appended after contains matches
-            lower_map = {str(c).strip().lower(): c for c in cr_opts_all}
-            fuzzy_lowers = difflib.get_close_matches(q_norm, list(lower_map.keys()), n=30, cutoff=0.60)
-            fuzzy_matches = [lower_map[x] for x in fuzzy_lowers]
-
-            # Combine (dedupe while preserving order) and cap length for UI usability
-            seen = set()
-            combined: list[str] = []
-            for c in contains_matches + fuzzy_matches:
-                if c not in seen:
-                    combined.append(c)
-                    seen.add(c)
-                if len(combined) >= 80:
-                    break
-
-            if combined:
-                cr_opts = combined
-                st.caption(f"CR Number search: '{cr_query}' → {len(combined)} matching CR Numbers")
-            else:
-                st.caption(f"CR Number search: '{cr_query}' → 0 matches (showing all CR Numbers)")
-
-        cr_sel = st.selectbox("CR Number", ["All"] + cr_opts, index=0)
+        # IMPORTANT: keep sidebar CR selector to allow users to filter (Blank) rows explicitly.
+        cr_opts_all = []
+        if COL_CR:
+            # include (Blank) if present; apply_common_normalisation already turns NA/empty into (Blank)
+            cr_opts_all = sorted(df[COL_CR].dropna().unique().tolist())
+        cr_sel = st.selectbox("CR Number", ["All"] + cr_opts_all, index=0)
 
         mod_opts = sorted(df[COL_MODULE].dropna().unique().tolist()) if COL_MODULE else []
         mod_sel = st.selectbox("Functional Module", ["All"] + mod_opts, index=0)
@@ -460,8 +431,34 @@ def build_details_page(df: pd.DataFrame):
         prep_opts = sorted(df[COL_PREP].dropna().unique().tolist()) if COL_PREP else []
         prep_sel = st.selectbox("CR Prep Status", ["All"] + prep_opts, index=0)
 
+    # -------------------------
+    # Main-page quick CR search (contains match)
+    # Placed right under the page header for discoverability.
+    # -------------------------
+    st.subheader("CR Details")
+
+    if "cr_contains_query" not in st.session_state:
+        st.session_state["cr_contains_query"] = ""
+
+    c1, c2 = st.columns([4, 1])
+    with c1:
+        cr_contains = st.text_input(
+            "Search CR Number (type partial, e.g., 422)",
+            key="cr_contains_query",
+            placeholder="e.g., 422",
+        )
+    with c2:
+        st.write("
+")
+        if st.button("Clear search"):
+            st.session_state["cr_contains_query"] = ""
+            cr_contains = ""
+
+    # -------------------------
     # Apply filters (ROW GRAIN)
+    # -------------------------
     df_f = df.copy()
+
     if year_sel != "All":
         df_f = df_f[df_f["Delivery Timeline (Year)"] == year_sel]
     if cleaned_sel != "All":
@@ -470,27 +467,54 @@ def build_details_page(df: pd.DataFrame):
         df_f = df_f[df_f[COL_DIV] == div_sel]
     if po_sel != "All" and COL_PO:
         df_f = df_f[df_f[COL_PO] == po_sel]
-    # CR search (contains): filters the MAIN TABLE and KPIs even if you don't pick from the dropdown.
-    # Example: typing "422" matches "TGS-CR422-2023".
-    q_norm = str(st.session_state.get("cr_contains_query", "")).strip().lower()
-    if q_norm and COL_CR:
-        df_f = df_f[df_f[COL_CR].astype(str).str.strip().str.lower().str.contains(q_norm, na=False)]
 
-    # Exact CR selection (intersects with the above, if used)
+    # Main-page contains search (filters table + KPIs)
+    if cr_contains and COL_CR:
+        q = safe_clean_text(cr_contains).lower()
+        df_f = df_f[df_f[COL_CR].astype(str).str.lower().str.contains(q, na=False)]
+
+    # Sidebar CR selector (applied after search; can be used to select (Blank))
     if cr_sel != "All" and COL_CR:
         df_f = df_f[df_f[COL_CR] == cr_sel]
+
     if mod_sel != "All" and COL_MODULE:
         df_f = df_f[df_f[COL_MODULE] == mod_sel]
     if prep_sel != "All" and COL_PREP:
         df_f = df_f[df_f[COL_PREP] == prep_sel]
 
+    # -------------------------
+    # Filtered state banner (so users always know what they are seeing)
+    # -------------------------
+    active_filters = []
+    if cr_contains:
+        active_filters.append(f"CR contains '{cr_contains}'")
+    if cr_sel != "All":
+        active_filters.append(f"CR = {cr_sel}")
+    if year_sel != "All":
+        active_filters.append(f"Year = {year_sel}")
+    if cleaned_sel != "All":
+        active_filters.append(f"Timeline = {cleaned_sel}")
+    if div_sel != "All":
+        active_filters.append(f"Division = {div_sel}")
+    if po_sel != "All":
+        active_filters.append(f"PO = {po_sel}")
+    if mod_sel != "All":
+        active_filters.append(f"Module = {mod_sel}")
+    if prep_sel != "All":
+        active_filters.append(f"Prep = {prep_sel}")
+
+    if active_filters:
+        st.info("Filtered by: " + " | ".join(active_filters))
+    else:
+        st.caption("Showing all rows (no filters applied).")
+
+    # -------------------------
     # KPIs (IMPORTANT):
     # - No. of Change Request = ROW COUNT (matches Power BI screenshot)
     # - Total Estimated Effort = SUM over rows
+    # -------------------------
     total_rows = int(len(df_f))
     total_effort = int(safe_sum(df_f[COL_EFFORT])) if COL_EFFORT else 0
-
-    st.subheader("CR Details")
 
     k1, k2 = st.columns([1, 1])
     with k1:
@@ -499,10 +523,6 @@ def build_details_page(df: pd.DataFrame):
     with k2:
         st.markdown("<div class='kpi-title'>Total Estimated Effort</div>", unsafe_allow_html=True)
         st.markdown(f"<div class='kpi-value'>{total_effort:,}</div>", unsafe_allow_html=True)
-
-    # Make the search effect obvious on the main page (not just in the sidebar)
-    if q_norm:
-        st.caption(f"Filtered by CR Number containing: '{q_norm}'")
 
     st.divider()
 
@@ -537,6 +557,7 @@ def build_details_page(df: pd.DataFrame):
     )
 
     st.caption("Row-grain table: duplicates and blank CR Numbers are intentionally kept to reflect workload items.")
+
 
 
 def main():
