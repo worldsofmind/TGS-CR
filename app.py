@@ -84,54 +84,6 @@ def year_from_cleaned(cleaned_timeline: str) -> str:
     return m.group(1) if m else "TBD"
 
 
-# =========================
-# Delivery period ordering (for timeline x-axis)
-# =========================
-
-def _delivery_period_sort_key(label: str):
-    """Sort key for Cleaned Timeline values like 'Jan-2025', 'Q1 2025', '1H 2026', 'TBD'."""
-    s = str(label).strip()
-    if s in ("", "(Blank)"):
-        s = "TBD"
-
-    if s.upper() == "TBD":
-        return (9999, 99, 9, s)
-
-    # Month-Year e.g. Jan-2025
-    try:
-        dt = pd.to_datetime(s, format="%b-%Y", errors="raise")
-        return (int(dt.year), int(dt.month), 0, s)
-    except Exception:
-        pass
-
-    # Quarter e.g. Q1 2025
-    m = re.match(r"^Q([1-4])\s*(\d{4})$", s, flags=re.I)
-    if m:
-        q = int(m.group(1))
-        y = int(m.group(2))
-        month = {1: 1, 2: 4, 3: 7, 4: 10}[q]
-        return (y, month, 1, s)
-
-    # Half-year e.g. 1H 2026 / 2H 2026
-    m = re.match(r"^([12])H\s*(\d{4})$", s, flags=re.I)
-    if m:
-        h = int(m.group(1))
-        y = int(m.group(2))
-        month = 1 if h == 1 else 7
-        return (y, month, 2, s)
-
-    # Fallback: push unknown formats to the end but keep stable order
-    y = year_from_cleaned(s)
-    try:
-        y_int = int(y)
-    except Exception:
-        y_int = 9998
-    return (y_int, 98, 8, s)
-
-
-def sort_delivery_periods(values: list[str]) -> list[str]:
-    return sorted(values, key=_delivery_period_sort_key)
-
 def safe_sum(series: pd.Series) -> float:
     s = pd.to_numeric(series, errors="coerce")
     return float(s.fillna(0).sum())
@@ -154,6 +106,56 @@ def pick_first_existing_col(df: pd.DataFrame, candidates: list[str]) -> str | No
         if c in df.columns:
             return c
     return None
+
+
+def sort_delivery_periods(periods: list[str]) -> list[str]:
+    """Sort delivery timeline labels in a human-friendly chronological order.
+
+    Handles common label formats found in the CR file / PBIX:
+      - 'MMM-YYYY' (e.g., 'Jan-2026')
+      - 'Q1 2025' / 'Q4 2026'
+      - '1H 2026' / '2H 2026'
+      - 'TBD' and '(Blank)' (sent to the end)
+    Unrecognised values are placed after recognised ones, sorted lexicographically.
+    """
+    if not periods:
+        return []
+
+    def key(p: str):
+        s = str(p).strip()
+        if s in {"", "(Blank)"}:
+            return (9, 9999, 99)
+        if s.upper() == "TBD":
+            return (8, 9999, 99)
+
+        # MMM-YYYY
+        dt = pd.to_datetime(s, errors="coerce", format="%b-%Y")
+        if pd.notna(dt):
+            return (0, int(dt.year), int(dt.month))
+
+        # Qx YYYY
+        m = re.match(r"^Q([1-4])\s*(\d{4})$", s, flags=re.I)
+        if m:
+            q = int(m.group(1))
+            y = int(m.group(2))
+            # map quarter to month anchor for sorting
+            return (1, y, q * 3)
+
+        # 1H/2H YYYY
+        m = re.match(r"^([12])H\s*(\d{4})$", s, flags=re.I)
+        if m:
+            h = int(m.group(1))
+            y = int(m.group(2))
+            return (2, y, 6 if h == 1 else 12)
+
+        # Plain year
+        m = re.match(r"^(\d{4})$", s)
+        if m:
+            return (3, int(m.group(1)), 0)
+
+        return (7, 9999, 99, s.lower())
+
+    return sorted([safe_clean_text(p) for p in periods], key=key)
 
 
 def apply_common_normalisation(df: pd.DataFrame) -> pd.DataFrame:
@@ -587,220 +589,366 @@ def build_details_page(df: pd.DataFrame):
     st.caption("Row-grain table: duplicates and blank CR Numbers are intentionally kept to reflect workload items.")
 
 
-
-
 # =========================
-# Page 3: CR Delivery Period (stacked bars)
+# Page 3: CR Division (SSG)
 # =========================
 
-def build_delivery_period_page(df: pd.DataFrame):
-    """Replicates the PBIX-style 'by delivery period' view (see screenshot)."""
+def build_ssg_division_page(df: pd.DataFrame):
+    """Division-focused dashboard (stacked bars by Division / Year, per screenshot)."""
     df = apply_common_normalisation(df)
 
-    # Columns
-    COL_PERIOD = "Cleaned Timeline"
-    COL_YEAR = "Delivery Timeline (Year)"
+    COL_DIV = pick_first_existing_col(df, ["Division"])
     COL_CR = pick_first_existing_col(df, ["CR Number", "CR No", "CR"])
-    COL_PREP = pick_first_existing_col(df, ["CR Prep Status", "Prep Status"])
-    COL_DELIVERY_STATUS = pick_first_existing_col(df, ["Delivery Status"])
-    COL_MODULE = pick_first_existing_col(df, ["Functional Module", "Module"])
     COL_EFFORT = pick_first_existing_col(
         df,
         [
-            "Appx Effort (Only for pipeline estimation)",
             "Estimated Effort",
+            "Appx Effort (Only for pipeline estimation)",
             "Effort",
             "Appx Effort",
         ],
     )
 
-    # Sidebar filters (match screenshot: Year multi-select; Cleaned Timeline dropdown)
+    if COL_DIV is None or COL_CR is None:
+        st.error("Missing required columns for this dashboard (need Division and CR Number).")
+        st.write("Columns found:", list(df.columns))
+        return
+
+    # ---- Sidebar filters (match screenshot) ----
     with st.sidebar:
         st.header("Filters")
 
-        year_opts = sort_delivery_periods(sorted(df[COL_YEAR].dropna().unique().tolist()))
-        year_sel = st.multiselect(
-            "Delivery Timeline (Year)",
-            options=year_opts,
-            default=year_opts,
-        )
+        div_opts = sorted(df[COL_DIV].dropna().unique().tolist())
+        div_sel = st.selectbox("Division", ["All"] + div_opts, index=0)
 
-        period_opts = sort_delivery_periods(sorted(df[COL_PERIOD].dropna().unique().tolist()))
-        period_sel = st.selectbox("Cleaned Timeline", ["All"] + period_opts, index=0)
+        cleaned_opts = sort_delivery_periods(df["Cleaned Timeline"].dropna().unique().tolist())
+        cleaned_sel = st.selectbox("Cleaned Timeline", ["All"] + cleaned_opts, index=0)
 
-    # Apply filters
+        year_opts = sorted(df["Delivery Timeline (Year)"].dropna().unique().tolist())
+        year_sel = st.multiselect("Delivery Timeline (Year)", year_opts, default=year_opts)
+
+    # ---- Apply filters ----
     df_f = df.copy()
+    if div_sel != "All":
+        df_f = df_f[df_f[COL_DIV] == div_sel]
+    if cleaned_sel != "All":
+        df_f = df_f[df_f["Cleaned Timeline"] == cleaned_sel]
     if year_sel:
-        df_f = df_f[df_f[COL_YEAR].isin(year_sel)]
-    if period_sel != "All":
-        df_f = df_f[df_f[COL_PERIOD] == period_sel]
+        df_f = df_f[df_f["Delivery Timeline (Year)"].isin(year_sel)]
 
-    # X-axis order
-    x_order = sort_delivery_periods(sorted(df_f[COL_PERIOD].dropna().unique().tolist()))
+    # For distinct CR counts: exclude blank CR numbers (align with Overview KPI definition)
+    df_nonblank_cr = df_f[df_f[COL_CR] != "(Blank)"].copy()
 
-    st.subheader("CR Delivery Period")
+    st.subheader("CR Division (SSG)")
 
-    # ---------- Chart 1: Number of CRs by Delivery Period + CR Prep Status ----------
-    st.markdown("#### Number of Change Requests By Delivery Period")
+    # =========================
+    # Chart 1: No of unique CRs by delivery period, stacked by Division
+    # =========================
+    st.markdown("### Number of Change Requests By Period (SSG)")
 
-    if not COL_CR or not COL_PREP:
-        st.info("Required columns not found for this chart (need CR Number and CR Prep Status).")
+    periods = sort_delivery_periods(df_f["Cleaned Timeline"].dropna().unique().tolist())
+    if not periods:
+        periods = sort_delivery_periods(df["Cleaned Timeline"].dropna().unique().tolist())
+
+    g1 = (
+        df_nonblank_cr
+        .groupby(["Cleaned Timeline", COL_DIV])[COL_CR]
+        .nunique()
+        .reset_index(name="No of CRs")
+    )
+    if len(g1) == 0:
+        st.info("No data available for the selected filters.")
     else:
-        # Count distinct, non-blank CRs per period+status (matches your CR Overview KPI definition)
-        tmp = df_f.copy()
-        tmp = tmp[tmp[COL_CR] != "(Blank)"]
-        tmp[COL_CR] = tmp[COL_CR].astype(str).str.strip()
-
-        ORDER_PREP = [
-            "(Blank)",
-            "0. CR Not Initiated",
-            "1. CR Initiated",
-            "4. CR Presented to PO/DTI",
-            "5. CR Presented to Business",
-            "6. CR Approved",
-            "7. CR Cancelled",
-        ]
-        tmp[COL_PREP] = force_category_order(tmp[COL_PREP].fillna("(Blank)"), ORDER_PREP)
-
-        g = (
-            tmp.groupby([COL_PERIOD, COL_PREP])[COL_CR]
-            .nunique()
-            .reset_index(name="CR Count")
-        )
+        g1["Cleaned Timeline"] = pd.Categorical(g1["Cleaned Timeline"], categories=periods, ordered=True)
+        g1 = g1.sort_values(["Cleaned Timeline", COL_DIV], kind="mergesort")
 
         fig1 = px.bar(
-            g,
-            x=COL_PERIOD,
-            y="CR Count",
-            color=COL_PREP,
-            category_orders={COL_PERIOD: x_order, COL_PREP: list(tmp[COL_PREP].cat.categories)},
+            g1,
+            x="Cleaned Timeline",
+            y="No of CRs",
+            color=COL_DIV,
             barmode="stack",
+            title="",
         )
         fig1.update_layout(
+            height=380,
+            margin=dict(l=0, r=0, t=10, b=0),
             xaxis_title="Delivery Timeline",
             yaxis_title="Number of CRs",
-            legend_title_text="CR Prep Status",
-            height=320,
-            margin=dict(l=10, r=10, t=10, b=10),
+            legend_title_text="Division",
         )
-
-        # Segment labels (inside)
-        fig1.update_traces(texttemplate="%{y}", textposition="inside")
-
-        # Totals on top
-        totals = g.groupby(COL_PERIOD)["CR Count"].sum().reindex(x_order).fillna(0)
-        fig1.add_scatter(
-            x=list(totals.index),
-            y=list(totals.values),
-            mode="text",
-            text=[str(int(v)) if v else "" for v in totals.values],
-            textposition="top center",
-            showlegend=False,
-        )
-
         st.plotly_chart(fig1, use_container_width=True, config={"displayModeBar": False})
 
-    # ---------- Chart 2: Delivery Status by Delivery Period (row-grain effort count = rows) ----------
-    st.markdown("#### Change Requests Delivery Status By Delivery Period")
+    st.divider()
 
-    if not COL_DELIVERY_STATUS:
-        st.info("Required column not found for this chart (need Delivery Status).")
+    # =========================
+    # Chart 2: Effort by Division, stacked by Delivery Timeline (Year)
+    # =========================
+    st.markdown("### Estimated Effort (Man-days) By Divisions")
+    if COL_EFFORT is None:
+        st.info("Effort column not found in the dataset (expected something like 'Appx Effort (Only for pipeline estimation)').")
     else:
-        tmp2 = df_f.copy()
-
-        ORDER_DELIVERY = [
-            "(Blank)",
-            "0. Not Started",
-            "1. CR Approved",
-            "2. CR Retracted/On-hold",
-            "3. Dev in Progress",
-            "4. Dev Completed",
-            "6. UAT completed",
-            "8. Deployed",
-        ]
-
-        tmp2[COL_DELIVERY_STATUS] = force_category_order(tmp2[COL_DELIVERY_STATUS].fillna("(Blank)"), ORDER_DELIVERY)
-
-        # IMPORTANT: grain rule: effort is summed by rows
         g2 = (
-            tmp2.groupby([COL_PERIOD, COL_DELIVERY_STATUS])
-            .size()
-            .reset_index(name="Effort")
+            df_f
+            .groupby([COL_DIV, "Delivery Timeline (Year)"])[COL_EFFORT]
+            .apply(safe_sum)
+            .reset_index(name="Estimated Effort (Man-days)")
         )
+        if len(g2) == 0:
+            st.info("No effort data available for the selected filters.")
+        else:
+            # Keep Division order stable for readability
+            div_order = sorted(df_f[COL_DIV].dropna().unique().tolist())
+            g2[COL_DIV] = pd.Categorical(g2[COL_DIV], categories=div_order, ordered=True)
+            g2 = g2.sort_values([COL_DIV, "Delivery Timeline (Year)"], kind="mergesort")
 
-        fig2 = px.bar(
-            g2,
-            x=COL_PERIOD,
-            y="Effort",
-            color=COL_DELIVERY_STATUS,
-            category_orders={COL_PERIOD: x_order, COL_DELIVERY_STATUS: list(tmp2[COL_DELIVERY_STATUS].cat.categories)},
-            barmode="stack",
-        )
-        fig2.update_layout(
-            xaxis_title="Delivery Timeline",
-            yaxis_title="Effort",
-            legend_title_text="Delivery Status",
-            height=320,
-            margin=dict(l=10, r=10, t=10, b=10),
-        )
-        fig2.update_traces(texttemplate="%{y}", textposition="inside")
+            fig2 = px.bar(
+                g2,
+                x=COL_DIV,
+                y="Estimated Effort (Man-days)",
+                color="Delivery Timeline (Year)",
+                barmode="stack",
+                title="",
+            )
+            fig2.update_layout(
+                height=380,
+                margin=dict(l=0, r=0, t=10, b=0),
+                xaxis_title="Division",
+                yaxis_title="Estimated Effort (Man-days)",
+                legend_title_text="Delivery Timeline (Year)",
+            )
+            st.plotly_chart(fig2, use_container_width=True, config={"displayModeBar": False})
 
-        totals2 = g2.groupby(COL_PERIOD)["Effort"].sum().reindex(x_order).fillna(0)
-        fig2.add_scatter(
-            x=list(totals2.index),
-            y=list(totals2.values),
-            mode="text",
-            text=[str(int(v)) if v else "" for v in totals2.values],
-            textposition="top center",
-            showlegend=False,
-        )
+    st.divider()
 
-        st.plotly_chart(fig2, use_container_width=True, config={"displayModeBar": False})
-
-    # ---------- Chart 3: Estimated Effort across Delivery Period by Functional Module ----------
-    st.markdown("#### Estimated Effort Across Delivery Period")
-
-    if not COL_EFFORT or not COL_MODULE:
-        st.info("Required columns not found for this chart (need Functional Module and an Effort column).")
+    # =========================
+    # Chart 3: No of unique CRs by Division, stacked by Delivery Timeline (Year)
+    # =========================
+    st.markdown("### No of Change Requests By Divisions")
+    g3 = (
+        df_nonblank_cr
+        .groupby([COL_DIV, "Delivery Timeline (Year)"])[COL_CR]
+        .nunique()
+        .reset_index(name="No of CRs")
+    )
+    if len(g3) == 0:
+        st.info("No data available for the selected filters.")
     else:
-        tmp3 = df_f.copy()
-        tmp3[COL_MODULE] = tmp3[COL_MODULE].fillna("(Blank)")
-        tmp3[COL_EFFORT] = pd.to_numeric(tmp3[COL_EFFORT], errors="coerce").fillna(0)
-
-        g3 = (
-            tmp3.groupby([COL_PERIOD, COL_MODULE])[COL_EFFORT]
-            .sum()
-            .reset_index(name="Effort")
-        )
+        div_order = sorted(df_f[COL_DIV].dropna().unique().tolist())
+        g3[COL_DIV] = pd.Categorical(g3[COL_DIV], categories=div_order, ordered=True)
+        g3 = g3.sort_values([COL_DIV, "Delivery Timeline (Year)"], kind="mergesort")
 
         fig3 = px.bar(
             g3,
-            x=COL_PERIOD,
-            y="Effort",
-            color=COL_MODULE,
-            category_orders={COL_PERIOD: x_order},
+            x=COL_DIV,
+            y="No of CRs",
+            color="Delivery Timeline (Year)",
             barmode="stack",
+            title="",
         )
         fig3.update_layout(
+            height=380,
+            margin=dict(l=0, r=0, t=10, b=0),
+            xaxis_title="Division",
+            yaxis_title="No of CRs",
+            legend_title_text="Delivery Timeline (Year)",
+        )
+        st.plotly_chart(fig3, use_container_width=True, config={"displayModeBar": False})
+
+    st.caption("Distinct CR counts exclude '(Blank)' CR Numbers. Effort follows row-grain summation and is not deduplicated.")
+
+
+# =========================
+# Page 4: CR Delivery Period
+# =========================
+
+def build_delivery_period_page(df: pd.DataFrame):
+    """Delivery-period dashboard (3 stacked charts per screenshot)."""
+    df = apply_common_normalisation(df)
+
+    COL_CR = pick_first_existing_col(df, ["CR Number", "CR No", "CR"])
+    COL_PREP = pick_first_existing_col(df, ["CR Prep Status", "Prep Status"])
+    COL_DELIVERY = pick_first_existing_col(df, ["Delivery Status", "Delivery Status (Clean)"])
+    COL_MODULE = pick_first_existing_col(df, ["Functional Module", "Module"])
+    COL_EFFORT = pick_first_existing_col(
+        df,
+        [
+            "Estimated Effort",
+            "Appx Effort (Only for pipeline estimation)",
+            "Effort",
+            "Appx Effort",
+        ],
+    )
+
+    required = [COL_CR, COL_PREP, COL_DELIVERY, COL_MODULE]
+    if any(c is None for c in required):
+        st.error(
+            "Missing required columns for this dashboard. Need CR Number, CR Prep Status, Delivery Status, and Functional Module."
+        )
+        st.write("Columns found:", list(df.columns))
+        return
+
+    # ---- Sidebar filters ----
+    with st.sidebar:
+        st.header("Filters")
+
+        year_opts = sorted(df["Delivery Timeline (Year)"].dropna().unique().tolist())
+        year_sel = st.multiselect("Delivery Timeline (Year)", year_opts, default=year_opts)
+
+        cleaned_opts = sort_delivery_periods(df["Cleaned Timeline"].dropna().unique().tolist())
+        cleaned_sel = st.selectbox("Cleaned Timeline", ["All"] + cleaned_opts, index=0)
+
+    # ---- Apply filters ----
+    df_f = df.copy()
+    if year_sel:
+        df_f = df_f[df_f["Delivery Timeline (Year)"].isin(year_sel)]
+    if cleaned_sel != "All":
+        df_f = df_f[df_f["Cleaned Timeline"] == cleaned_sel]
+
+    # Timeline order for charts
+    period_order = sort_delivery_periods(df_f["Cleaned Timeline"].dropna().unique().tolist())
+    if not period_order:
+        period_order = sort_delivery_periods(df["Cleaned Timeline"].dropna().unique().tolist())
+
+    # Distinct CR counts exclude blank CR Number (align with Overview KPI definition)
+    df_nonblank_cr = df_f[df_f[COL_CR] != "(Blank)"].copy()
+
+    st.subheader("CR Delivery Period")
+
+    # Preferred legend orders (match PBIX numbering where possible)
+    ORDER_PREP = [
+        "(Blank)",
+        "0. CR Not Initiated",
+        "1. CR Initiated",
+        "4. CR Presented to PO/DTI",
+        "5. CR Presented to Business",
+        "6. CR Approved",
+        "7. CR Cancelled",
+    ]
+    ORDER_DELIVERY = [
+        "(Blank)",
+        "0. Not Started",
+        "1. CR Approved",
+        "2. CR Retracted/On-hold",
+        "3. Dev in Progress",
+        "4. Dev Completed",
+        "6. UAT completed",
+        "8. Deployed",
+    ]
+
+    # =========================
+    # Chart 1: Number of Change Requests By Delivery Period (stacked by CR Prep Status)
+    # =========================
+    st.markdown("### Number of Change Requests By Delivery Period")
+
+    g1 = (
+        df_nonblank_cr
+        .groupby(["Cleaned Timeline", COL_PREP])[COL_CR]
+        .nunique()
+        .reset_index(name="Number of CRs")
+    )
+    if len(g1) == 0:
+        st.info("No data available for the selected filters.")
+    else:
+        g1["Cleaned Timeline"] = pd.Categorical(g1["Cleaned Timeline"], categories=period_order, ordered=True)
+        g1[COL_PREP] = force_category_order(g1[COL_PREP], ORDER_PREP)
+        g1 = g1.sort_values(["Cleaned Timeline", COL_PREP], kind="mergesort")
+
+        fig1 = px.bar(
+            g1,
+            x="Cleaned Timeline",
+            y="Number of CRs",
+            color=COL_PREP,
+            barmode="stack",
+        )
+        fig1.update_layout(
+            height=360,
+            margin=dict(l=0, r=0, t=10, b=0),
+            xaxis_title="Delivery Timeline",
+            yaxis_title="Number of CRs",
+            legend_title_text="CR Prep Status",
+        )
+        st.plotly_chart(fig1, use_container_width=True, config={"displayModeBar": False})
+
+    st.divider()
+
+    # =========================
+    # Chart 2: Delivery Status By Delivery Period (Effort = row count)
+    # =========================
+    st.markdown("### Change Requests Delivery Status By Delivery Period")
+
+    # Row-grain effort: each row is one unit of effort/workload
+    g2 = (
+        df_f
+        .groupby(["Cleaned Timeline", COL_DELIVERY])
+        .size()
+        .reset_index(name="Effort")
+    )
+    if len(g2) == 0:
+        st.info("No data available for the selected filters.")
+    else:
+        g2["Cleaned Timeline"] = pd.Categorical(g2["Cleaned Timeline"], categories=period_order, ordered=True)
+        g2[COL_DELIVERY] = force_category_order(g2[COL_DELIVERY], ORDER_DELIVERY)
+        g2 = g2.sort_values(["Cleaned Timeline", COL_DELIVERY], kind="mergesort")
+
+        fig2 = px.bar(
+            g2,
+            x="Cleaned Timeline",
+            y="Effort",
+            color=COL_DELIVERY,
+            barmode="stack",
+        )
+        fig2.update_layout(
+            height=360,
+            margin=dict(l=0, r=0, t=10, b=0),
             xaxis_title="Delivery Timeline",
             yaxis_title="Effort",
-            legend_title_text="Functional Module",
-            height=340,
-            margin=dict(l=10, r=10, t=10, b=10),
+            legend_title_text="Delivery Status",
         )
-        fig3.update_traces(texttemplate="%{y:.0f}", textposition="inside")
+        st.plotly_chart(fig2, use_container_width=True, config={"displayModeBar": False})
 
-        totals3 = g3.groupby(COL_PERIOD)["Effort"].sum().reindex(x_order).fillna(0)
-        fig3.add_scatter(
-            x=list(totals3.index),
-            y=list(totals3.values),
-            mode="text",
-            text=[str(int(round(v))) if v else "" for v in totals3.values],
-            textposition="top center",
-            showlegend=False,
+    st.divider()
+
+    # =========================
+    # Chart 3: Estimated Effort Across Delivery Period (stacked by Functional Module)
+    # =========================
+    st.markdown("### Estimated Effort Across Delivery Period")
+    if COL_EFFORT is None:
+        st.info("Effort column not found in the dataset (expected something like 'Appx Effort (Only for pipeline estimation)').")
+    else:
+        g3 = (
+            df_f
+            .groupby(["Cleaned Timeline", COL_MODULE])[COL_EFFORT]
+            .apply(safe_sum)
+            .reset_index(name="Estimated Effort")
         )
+        if len(g3) == 0:
+            st.info("No effort data available for the selected filters.")
+        else:
+            g3["Cleaned Timeline"] = pd.Categorical(g3["Cleaned Timeline"], categories=period_order, ordered=True)
+            g3 = g3.sort_values(["Cleaned Timeline", COL_MODULE], kind="mergesort")
 
-        st.plotly_chart(fig3, use_container_width=True, config={"displayModeBar": False})
+            fig3 = px.bar(
+                g3,
+                x="Cleaned Timeline",
+                y="Estimated Effort",
+                color=COL_MODULE,
+                barmode="stack",
+            )
+            fig3.update_layout(
+                height=360,
+                margin=dict(l=0, r=0, t=10, b=0),
+                xaxis_title="Delivery Timeline",
+                yaxis_title="Effort",
+                legend_title_text="Functional Module",
+            )
+            st.plotly_chart(fig3, use_container_width=True, config={"displayModeBar": False})
+
+    st.caption(
+        "Distinct CR counts exclude '(Blank)' CR Numbers. Delivery Status chart uses row count as Effort (row-grain workload)."
+    )
+
+
 def main():
     st.set_page_config(page_title="CR Dashboard Prototype", layout="wide")
 
@@ -830,7 +978,7 @@ def main():
         st.header("Dashboard")
         st.radio(
             "",
-            ["CR Overview", "CR Details", "CR Delivery Period"],
+            ["CR Overview", "CR Details", "CR Division (SSG)", "CR Delivery Period"],
             key="selected_dashboard",
         )
         st.divider()
@@ -863,6 +1011,8 @@ def main():
         build_overview_page(df_fact)
     elif st.session_state.selected_dashboard == "CR Details":
         build_details_page(df_fact)
+    elif st.session_state.selected_dashboard == "CR Division (SSG)":
+        build_ssg_division_page(df_fact)
     else:
         build_delivery_period_page(df_fact)
 
