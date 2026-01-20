@@ -1118,7 +1118,7 @@ def build_workplan_page(df: pd.DataFrame):
             border-radius: 8px;
             text-align: center;
             font-weight: 700;
-            margin-top: 6px;
+            margin-bottom: 6px;
         }
         </style>
         """,
@@ -1137,6 +1137,9 @@ def build_workplan_page(df: pd.DataFrame):
                 continue
             period = row_periods[i]
             with cols[i]:
+                # Period label should appear ABOVE the table (more intuitive than placing it below)
+                st.markdown(f'<div class="wp-period-label">{period}</div>', unsafe_allow_html=True)
+
                 # Filter per card period
                 df_p = df_f[df_f["Cleaned Timeline"] == period].copy()
 
@@ -1174,7 +1177,6 @@ def build_workplan_page(df: pd.DataFrame):
                     with m2:
                         st.markdown(f'<div class="wp-metric-right">{effort_display}</div>', unsafe_allow_html=True)
 
-                st.markdown(f'<div class="wp-period-label">{period}</div>', unsafe_allow_html=True)
 
     st.caption(
         "Card view: table preserves row-grain records (duplicates + '(Blank)' CR Numbers). "
